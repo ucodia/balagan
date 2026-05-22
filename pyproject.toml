@@ -1,0 +1,40 @@
+[project]
+name = "balagan"
+version = "0.1.0"
+description = "BalaGAN is a real-time weight interpolation engine which allows to navigate latent space across StyleGAN model snapshots of a same training run."
+readme = "README.md"
+requires-python = "==3.12.*"
+license = "Apache-2.0"
+authors = [
+    { name = "Lionel Ringenbach", email = "ucodia@live.com" },
+]
+dependencies = [
+    "torch==2.8",
+    "numpy",
+    "scipy",
+    "pyside6",
+    "python-osc",
+    "click",
+    "pillow",
+    "syphon-python ; sys_platform == 'darwin'",
+    "SpoutGL ; sys_platform == 'win32'",
+    "requests>=2.34.2",
+]
+
+[project.scripts]
+balagan = "balagan.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/balagan"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
