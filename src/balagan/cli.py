@@ -109,7 +109,7 @@ def _run_gui(engine, osc_server, run_dir, output_name) -> None:
 @click.option(
     "--window-size",
     type=int,
-    default=8,
+    default=32,
     show_default=True,
     help="Snapshot manager window size (0 = load all snapshots).",
 )

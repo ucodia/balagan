@@ -61,7 +61,7 @@ class SnapshotManager:
         snapshots: Sequence[SnapshotInfo],
         canonical_kimg: int,
         loader: Callable[[Path], torch.nn.Module],
-        window_size: int = 8,
+        window_size: int = 32,
     ) -> None:
         self._snapshots = sorted(snapshots, key=lambda snap: snap.kimg)
         self._index_of = {snap.kimg: i for i, snap in enumerate(self._snapshots)}

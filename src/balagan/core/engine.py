@@ -190,7 +190,7 @@ class Engine:
 
 
 def build_engine(
-    config: EngineConfig, device: str | torch.device, window_size: int = 8
+    config: EngineConfig, device: str | torch.device, window_size: int = 32
 ) -> Engine:
     """Construct the full engine component graph from a validated config.
 
