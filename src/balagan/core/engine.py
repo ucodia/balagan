@@ -67,7 +67,7 @@ class Engine:
 
         self._blender_cached: set[int] = set()
         self._last_frame_start: float | None = None
-        self._last_log_time = time.monotonic()
+        self._last_log_time = time.perf_counter()
         self._frames_since_log = 0
         self._last_status = ""
 
@@ -96,7 +96,7 @@ class Engine:
 
     def render_frame(self) -> np.ndarray:
         """Produce one frame as a uint8 HWC RGB array."""
-        frame_start = time.monotonic()
+        frame_start = time.perf_counter()
         delta = (
             frame_start - self._last_frame_start
             if self._last_frame_start is not None
@@ -169,13 +169,13 @@ class Engine:
     def _limit_framerate(self, fps_cap: int, frame_start: float) -> None:
         if fps_cap <= 0:
             return
-        remaining = (1.0 / fps_cap) - (time.monotonic() - frame_start)
+        remaining = (1.0 / fps_cap) - (time.perf_counter() - frame_start)
         if remaining > 0.0:
             time.sleep(remaining)
 
     def _report(self, position: float, kimg_a: int, kimg_b: int, alpha: float) -> None:
         self._frames_since_log += 1
-        elapsed = time.monotonic() - self._last_log_time
+        elapsed = time.perf_counter() - self._last_log_time
         if elapsed < 1.0:
             return
         self._last_status = (
@@ -186,7 +186,7 @@ class Engine:
         )
         logger.info("%s", self._last_status)
         self._frames_since_log = 0
-        self._last_log_time = time.monotonic()
+        self._last_log_time = time.perf_counter()
 
 
 def build_engine(
