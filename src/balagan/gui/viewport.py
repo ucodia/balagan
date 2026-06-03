@@ -13,45 +13,44 @@ class Viewport(QWidget):
         super().__init__()
         self._runtime_state = runtime_state
         self._image = QImage()
+        self._loading_text = None
         self._dragging = False
         self._last_pos = None
-        self._sized_to_frame = False
-        self.setMinimumSize(512, 512)
+        self.setMinimumSize(256, 256)
 
-    def update_frame(self, image: QImage) -> None:
-        """Slot for RenderWorker.frame_ready: store the frame and request a repaint.
-
-        On the first frame, grow the window so the viewport shows the snapshot at
-        its native pixel resolution; afterwards the window stays freely resizable.
-        """
-        self._image = image
-        if not self._sized_to_frame and not image.isNull():
-            self._sized_to_frame = True
-            self._resize_window_to_frame(image.width(), image.height())
+    def start_loading(self, text: str) -> None:
+        """Slot for RenderWorker.loading_started: show a message centered over the
+        canvas until the first frame arrives."""
+        self._loading_text = text
         self.update()
 
-    def _resize_window_to_frame(self, frame_width: int, frame_height: int) -> None:
-        """Resize the top-level window by the viewport's gap to the frame size, so
-        the viewport ends up at the frame's native resolution while the control
-        panel and window chrome keep their own widths."""
-        window = self.window()
-        delta_w = frame_width - self.width()
-        delta_h = frame_height - self.height()
-        window.resize(window.width() + delta_w, window.height() + delta_h)
+    def update_frame(self, image: QImage) -> None:
+        """Slot for RenderWorker.frame_ready: store the frame and request a repaint."""
+        self._image = image
+        if not image.isNull():
+            self._loading_text = None
+        self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.fillRect(self.rect(), Qt.GlobalColor.black)
-        if self._image.isNull():
-            return
-        scaled = self._image.scaled(
-            self.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        x = (self.width() - scaled.width()) // 2
-        y = (self.height() - scaled.height()) // 2
-        painter.drawImage(x, y, scaled)
+        if not self._image.isNull():
+            scaled = self._image.scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            x = (self.width() - scaled.width()) // 2
+            y = (self.height() - scaled.height()) // 2
+            painter.drawImage(x, y, scaled)
+        if self._loading_text:
+            painter.setPen(Qt.GlobalColor.white)
+            font = painter.font()
+            font.setPointSize(18)
+            painter.setFont(font)
+            painter.drawText(
+                self.rect(), Qt.AlignmentFlag.AlignCenter, self._loading_text
+            )
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

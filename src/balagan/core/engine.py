@@ -178,19 +178,19 @@ class Engine:
         elapsed = time.perf_counter() - self._last_log_time
         if elapsed < 1.0:
             return
-        self._last_status = (
-            f"{self._frames_since_log / elapsed:.1f} fps | t={position:.3f} | "
-            f"kimg {kimg_a}->{kimg_b} @ {alpha:.3f} | "
-            f"loaded {len(self._snapshot_manager.loaded_kimgs())}, "
-            f"pending {self._snapshot_manager.pending_count()}"
-        )
-        logger.info("%s", self._last_status)
+        fps = f"{self._frames_since_log / elapsed:.1f} fps"
+        blend = f"{kimg_a} → {kimg_b} ({round(alpha * 100)}%)"
+        self._last_status = f"{fps} | {blend}"
+        logger.info("%s | t=%.3f | %s", fps, position, blend)
         self._frames_since_log = 0
         self._last_log_time = time.perf_counter()
 
 
 def build_engine(
-    config: EngineConfig, device: str | torch.device, window_size: int = 32
+    config: EngineConfig,
+    device: str | torch.device,
+    window_size: int = 32,
+    runtime_state: RuntimeState | None = None,
 ) -> Engine:
     """Construct the full engine component graph from a validated config.
 
@@ -198,6 +198,10 @@ def build_engine(
     extracts each snapshot's synthesis network. Submodule imports happen lazily
     inside the loaders, so ``stylegan3/`` must be on ``sys.path`` before the
     returned engine is primed.
+
+    Pass ``runtime_state`` to share an existing state across engine rebuilds, so
+    GUI control values and widget bindings survive a swap; when omitted a fresh
+    one is created.
     """
     canonical_kimg = config.canonical_mapping_kimg
     canonical_pkl = config.snapshots_dir / f"network-snapshot-{canonical_kimg:06d}.pkl"
@@ -213,7 +217,7 @@ def build_engine(
         snapshot_manager=SnapshotManager(
             config.snapshots, canonical_kimg, snapshot_loader, window_size
         ),
-        runtime_state=RuntimeState(),
+        runtime_state=runtime_state if runtime_state is not None else RuntimeState(),
     )
     logger.info(
         "Engine built: %d snapshots, device %s, window size %d",

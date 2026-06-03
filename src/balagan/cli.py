@@ -54,17 +54,43 @@ def _run_headless(engine, osc_server, output_name) -> None:
         osc_server.stop()
 
 
-def _run_gui(engine, osc_server, snapshots_dir, output_name) -> None:
-    """Start the OSC server and run the PySide6 GUI until the window closes."""
+def _run_gui(
+    initial_config, runtime_state, osc_server, device, window_size, output_name
+) -> None:
+    """Start the OSC server and run the PySide6 GUI until the window closes.
+
+    The engine is built lazily by the render worker once a folder is selected
+    (or from ``initial_config`` when one was passed on the command line), so the
+    Qt main thread never blocks on the load.
+    """
+    import signal
+
+    from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
     from balagan.gui.main_window import MainWindow
 
     osc_server.start()
-    engine.prime()  # eager initial load before the window appears
     app = QApplication([])
-    window = MainWindow(engine, snapshots_dir, output_name)
+    window = MainWindow(
+        runtime_state,
+        device,
+        window_size,
+        output_name,
+        osc_server,
+        initial_config=initial_config,
+    )
     window.show()
+
+    # Qt's C++ event loop blocks Python's SIGINT delivery, so Ctrl+C is ignored
+    # while it runs. Close the window on SIGINT (triggering the worker teardown),
+    # and run a periodic no-op timer to give the interpreter a slice in which to
+    # actually deliver the signal.
+    signal.signal(signal.SIGINT, lambda *_: window.close())
+    keepalive = QTimer()
+    keepalive.start(200)
+    keepalive.timeout.connect(lambda: None)
+
     logger.info("GUI window opened")
     try:
         app.exec()
@@ -75,9 +101,11 @@ def _run_gui(engine, osc_server, snapshots_dir, output_name) -> None:
 @click.command()
 @click.option(
     "--snapshots-dir",
-    required=True,
+    required=False,
+    default=None,
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Path to the training run folder.",
+    help="Path to the training run folder. Optional in GUI mode (pick a folder "
+    "in the window); required with --headless.",
 )
 @click.option(
     "--canonical-kimg",
@@ -138,22 +166,41 @@ def main(snapshots_dir, canonical_kimg, headless, debug, osc_port, output_name, 
     _ensure_stylegan3_on_path()
 
     from balagan.config import ConfigError, load_run
-
-    try:
-        config = load_run(snapshots_dir, canonical_kimg)
-    except ConfigError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    from balagan.core.engine import build_engine
+    from balagan.core.runtime_state import RuntimeState
     from balagan.io.osc_server import OSCServer
 
-    engine = build_engine(config, resolved_device, window_size=window_size)
-    engine.runtime_state.update(debug=debug)
-    osc_server = OSCServer(engine.runtime_state, port=osc_port)
+    runtime_state = RuntimeState()
+    runtime_state.update(debug=debug)
+    osc_server = OSCServer(runtime_state, port=osc_port)
+
     if headless:
+        if snapshots_dir is None:
+            raise click.ClickException("--snapshots-dir is required in headless mode")
+        try:
+            config = load_run(snapshots_dir, canonical_kimg)
+        except ConfigError as exc:
+            raise click.ClickException(str(exc)) from exc
+        from balagan.core.engine import build_engine
+
+        engine = build_engine(
+            config, resolved_device, window_size=window_size, runtime_state=runtime_state
+        )
         _run_headless(engine, osc_server, output_name)
     else:
-        _run_gui(engine, osc_server, snapshots_dir, output_name)
+        initial_config = None
+        if snapshots_dir is not None:
+            try:
+                initial_config = load_run(snapshots_dir, canonical_kimg)
+            except ConfigError as exc:
+                raise click.ClickException(str(exc)) from exc
+        _run_gui(
+            initial_config,
+            runtime_state,
+            osc_server,
+            resolved_device,
+            window_size,
+            output_name,
+        )
 
 
 if __name__ == "__main__":

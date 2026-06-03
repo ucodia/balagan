@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from balagan.config import SnapshotInfo
-from balagan.core.engine import Engine
+from balagan.config import EngineConfig, SnapshotInfo
+from balagan.core.engine import Engine, build_engine
 from balagan.core.interpolator import Interpolator
 from balagan.core.latent_navigator import LatentNavigator
 from balagan.core.runtime_state import RuntimeState
@@ -195,6 +195,23 @@ def test_debug_overlay_marks_the_frame_only_when_enabled():
     assert overlaid.shape == plain.shape == (64, 64, 3)
     assert np.array_equal(plain, np.full((64, 64, 3), 128, np.uint8))
     assert not np.array_equal(overlaid, plain)
+
+
+def test_build_engine_uses_the_injected_runtime_state(monkeypatch):
+    """build_engine must wire in a caller-supplied RuntimeState so the GUI can
+    keep one state object alive across engine rebuilds."""
+    monkeypatch.setattr(
+        "balagan.core.engine.load_canonical_mapping",
+        lambda pkl, device: StubMapping(),
+    )
+    config = EngineConfig(
+        snapshots_dir=Path("run"),
+        canonical_mapping_kimg=200,
+        snapshots=tuple(SNAPSHOTS),
+    )
+    sentinel = RuntimeState()
+    engine = build_engine(config, "cpu", window_size=3, runtime_state=sentinel)
+    assert engine.runtime_state is sentinel
 
 
 def test_debug_overlay_skips_an_empty_status():

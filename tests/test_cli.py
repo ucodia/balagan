@@ -23,6 +23,7 @@ def test_cli_help_lists_options():
     assert "--canonical-kimg" in result.output
 
 
-def test_cli_errors_without_required_options():
-    result = CliRunner().invoke(main, [])
+def test_cli_headless_requires_a_snapshots_dir():
+    result = CliRunner().invoke(main, ["--headless"])
     assert result.exit_code != 0
+    assert "--snapshots-dir is required in headless mode" in result.output

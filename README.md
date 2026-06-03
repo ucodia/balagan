@@ -1,6 +1,6 @@
 # BalaGAN
 
-BalaGAN is a real-time weight interpolation engine which allows to navigate latent space across StyleGAN model snapshots of a same training run.
+BalaGAN is a real-time weight interpolation engine which allows to navigate latent space across StyleGAN model snapshots.
 
 ## Requirements
 

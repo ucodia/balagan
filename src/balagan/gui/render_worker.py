@@ -1,27 +1,63 @@
-"""Qt render worker: runs the engine's per-frame loop on a background thread."""
+"""Qt render worker: builds the engine and runs its per-frame loop on a thread."""
+
+import logging
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
+logger = logging.getLogger(__name__)
+
 
 class RenderWorker(QThread):
-    """Runs the engine loop on its own thread, emitting each rendered frame as a
-    QImage plus the engine's status line. While the runtime state's Spout/Syphon
-    checkbox is enabled, frames are also published to a lazily-created output.
+    """Builds the engine for a config, primes it, and runs its loop on its own
+    thread, emitting each rendered frame as a QImage plus the engine's status
+    line. The heavy build and prime happen here so the Qt main thread never
+    blocks. While the runtime state's Spout/Syphon checkbox is enabled, frames
+    are also published to a lazily-created output.
     """
 
     frame_ready = Signal(QImage)
     status_changed = Signal(str)
+    loading_started = Signal(str)
+    load_failed = Signal(str)
 
-    def __init__(self, engine, output_name: str) -> None:
+    def __init__(
+        self, config, device, window_size: int, runtime_state, output_name: str
+    ) -> None:
         super().__init__()
-        self._engine = engine
+        self._config = config
+        self._device = device
+        self._window_size = window_size
+        self._runtime_state = runtime_state
         self._output_name = output_name
+        self._engine = None
         self._output = None
         self._running = False
 
     def run(self) -> None:
         self._running = True
+        total = len(self._config.snapshots)
+        count = total if self._window_size <= 0 else min(self._window_size, total)
+        self.loading_started.emit(f"Loading {count} snapshots…")
+        try:
+            from balagan.core.engine import build_engine
+
+            self._engine = build_engine(
+                self._config,
+                self._device,
+                self._window_size,
+                self._runtime_state,
+            )
+            self._engine.prime()
+        except Exception as exc:  # noqa: BLE001 — surface any build/prime failure
+            logger.exception("Engine failed to load")
+            self.load_failed.emit(str(exc))
+            return
+
+        # stop() may have arrived while we were building; bail before the loop.
+        if not self._running:
+            return
+
         self._engine.start()
         while self._running:
             frame = self._engine.render_frame()
@@ -37,7 +73,7 @@ class RenderWorker(QThread):
         self._engine.stop()
 
     def _publish(self, frame, width: int, height: int) -> None:
-        if not self._engine.runtime_state.snapshot().spout_syphon_enabled:
+        if not self._runtime_state.snapshot().spout_syphon_enabled:
             return
         if self._output is None:
             from balagan.io.frame_output import FrameOutput

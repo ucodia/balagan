@@ -96,6 +96,13 @@ class OSCServer:
         self._thread.start()
         logger.info("OSC server listening on %s:%d", self._host, self.port)
 
+    def restart(self, port: int) -> None:
+        """Rebind the server to a new port. Raises OSError if the port is
+        unavailable, leaving the server stopped for the caller to recover."""
+        self.stop()
+        self._port = port
+        self.start()
+
     def stop(self) -> None:
         """Stop serving and close the UDP socket."""
         if self._server is not None:
