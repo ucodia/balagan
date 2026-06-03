@@ -2,90 +2,193 @@
 
 Guidance for AI coding agents working in this repository.
 
-## Repo orientation
+## What BalaGAN is
 
-This is a real-time interpolation engine that blends StyleGAN2-ADA snapshots from a single training run, driven by an audience-position scalar that maps to a perceptual trajectory through training. Read `IMPLEMENTATION.md` for the full specification before doing any non-trivial work.
+A real-time weight-interpolation engine that blends StyleGAN snapshots
+from a single training run, driven by an audience-position scalar in `[0, 1]`
+that maps through a phase-aware, FID-weighted trajectory. It was built for an
+interactive installation where audience proximity to a wall drives the model's
+"nightmare level" through training — that context informs design choices like
+the normalized 0→1 position, the headless mode for venue use, and the
+conservative default FPS cap.
 
-The `stylegan3/` directory is a git submodule of `https://github.com/ucodia/stylegan3` (a personal fork of NVIDIA's StyleGAN3 repo, used here for its StyleGAN2-ADA training code, network classes, and snapshot loading utilities). Treat it as a vendored dependency: do not modify files inside it. Import from it via the path setup in `cli.py`.
+## Repo map
 
-The `prototypes/` directory contains exploratory code (notably `gen_balagan.py`) that informs design decisions but is not part of the production engine. Reference it for patterns, do not depend on or modify it.
+```
+balagan/
+├── src/balagan/
+│   ├── cli.py                  # `balagan` entry point (--headless, --debug)
+│   ├── config.py               # phase-config JSON + run-folder validation
+│   ├── logging_config.py       # console + daily-rotating file
+│   ├── core/                   # the pipeline; imports neither gui nor io
+│   │   ├── canonical_mapping.py
+│   │   ├── engine.py           # per-frame orchestration
+│   │   ├── interpolator.py     # phase-aware FID-weighted t-coord mapping
+│   │   ├── latent_navigator.py # seed-grid bilinear z→w
+│   │   ├── runtime_state.py    # thread-safe shared state
+│   │   ├── snapshot_manager.py # rolling window + background loader
+│   │   └── weight_blender.py   # in-place state_dict lerp
+│   ├── io/
+│   │   ├── osc_server.py       # python-osc on its own thread
+│   │   ├── frame_output.py     # platform dispatch
+│   │   ├── output_macos.py     # Syphon
+│   │   └── output_windows.py   # Spout (marked UNVERIFIED — Windows-only deps)
+│   └── gui/
+│       ├── main_window.py      # PySide6 QMainWindow
+│       ├── viewport.py         # rendered frame + mouse drag
+│       ├── control_panel.py    # widgets, two-way bound to RuntimeState
+│       └── render_worker.py    # QThread driving the engine loop
+├── tests/                      # pytest; core fully unit-tested, others integration only
+├── stylegan3/                  # git submodule — DO NOT MODIFY
+├── prototypes/                 # exploratory; reference for patterns, DO NOT MODIFY
+├── pyproject.toml
+└── README.md
+```
 
-## Workflow
+## Setup and common commands
 
-This project uses uv. Common commands:
+```bash
+git submodule update --init --recursive   # required before first uv sync
+uv sync                                    # install deps + build the project
+uv run pytest                              # full suite (~98 tests)
+uv run pytest tests/test_<module>.py -v    # focused
+uv run balagan --help                      # CLI surface
+uv run ruff check src/ tests/              # lint (if ruff is configured)
+uv run ruff format src/ tests/             # format
+```
 
-- `uv sync` to install dependencies
-- `uv run pytest` to run tests
-- `uv run pytest tests/test_<module>.py -v` for focused testing
-- `uv run balagan --help` to inspect CLI
-- `uv run ruff check src/ tests/` for linting (if ruff is configured)
-- `uv run ruff format src/ tests/` for formatting
+## Platforms
 
-After `git submodule update --init --recursive`, dependencies install cleanly with `uv sync`. If a teammate adds a dependency, re-run `uv sync` before working.
+- **macOS** (primary dev target). MPS torch (default index), Syphon output
+  via `syphon-python`.
+- **Windows.** CUDA torch from the `pytorch-cu128` uv index declared in
+  `pyproject.toml`, Spout output via `SpoutGL`, plus Windows-only `pyopengl`
+  and `ninja`. The `[tool.uv.sources]` block routes the `torch` dep to that
+  index for `sys_platform == 'win32' or 'linux'`.
+- **Linux.** Same CUDA index as Windows; not regularly verified.
+- **Timer resolution.** Always use `time.perf_counter()` for per-frame
+  timing. `time.monotonic()` is ~15 ms granularity on Windows and quantizes
+  the frame limiter.
+- **Default `--window-size` is 32** (was 8 in early development; raised to
+  use typical VRAM / unified-memory budgets).
 
 ## Coding conventions
 
-**Module structure.** Each `src/balagan/<area>/` package owns a coherent concept (core, io, gui). Cross-package imports flow downward: `gui` may import from `core` and `io`; `core` may import from neither. Violations of this rule indicate a design problem; raise it in your status report rather than working around it.
+**Module layering.** `gui` may import from `core` and `io`; `core` may
+import from neither. Violations indicate a design problem — raise it in
+your status report rather than working around it.
 
-**Threading.** The engine runs on a render thread. The OSC server runs on its own thread. The GUI runs on Qt's main thread. The snapshot manager has its own background loader thread. Shared state goes through `RuntimeState` with explicit locking. Never call Qt APIs from a non-main thread; use signals.
+**Threading.** Render thread, OSC server thread, snapshot loader thread,
+Qt main thread. Shared state goes through `RuntimeState` (lock-guarded
+immutable `StateSnapshot` swap). Never call Qt APIs from a non-main thread
+— use signals.
 
-**Tensor handling.** Snapshots are loaded onto the inference device once and stay there. Frame outputs go to CPU for display/transport. Never move tensors between devices on the render hot path (per-frame). When you need a CPU copy for the GUI viewport, do it once at the end of the frame.
+**Tensor handling.** Snapshots load to the inference device once and stay
+there. Never move tensors between devices on the render hot path. The CPU
+copy for the GUI viewport happens once at frame end.
 
-**Logging.** Use `logging.getLogger(__name__)` at module scope. Never use `print()` outside of CLI top-level user-facing output. Log levels per the spec: INFO for state changes, WARNING for recoverable issues, ERROR for exceptions.
+**Logging.** `logging.getLogger(__name__)` at module scope. Never `print()`
+outside CLI top-level user-facing output. INFO for state changes, WARNING
+for recoverable issues, ERROR for exceptions.
 
-**Errors.** Validation errors (bad config, missing snapshots, malformed OSC) should produce clear actionable messages. Engine-internal errors should bubble up with stack traces in logs. Never silently swallow exceptions.
+**Errors.** Validation errors (bad config, missing snapshots, malformed
+OSC) produce clear actionable messages. Engine-internal errors bubble up
+with tracebacks. Never silently swallow exceptions.
 
-**Type hints.** Use modern Python type hints (`list[int]`, not `List[int]`) and require Python 3.12. Add hints to public function signatures; inline locals don't need them unless type inference is unclear.
+**Type hints.** Modern (`list[int]`, not `List[int]`); the project is pinned
+to Python 3.12. Hints on public function signatures; inline locals don't
+need them unless inference is unclear.
 
-## Testing requirements
+**Comments.** Only when the *why* is non-obvious — see the global CLAUDE.md
+rules.
 
-Every module in `src/balagan/core/` must have a corresponding test file. The CLI, GUI, and IO modules are tested at integration level only.
+## Testing
 
-Tests should mock snapshot loading where possible. Real snapshot files are too large to ship; tests that need a real network use a fixture that constructs a tiny stub `nn.Module` with z_dim=4, w_dim=4, num_ws=2, img_resolution=64.
-
-Run `uv run pytest` before declaring any task complete. If a test fails, fix it or explain why it cannot be fixed in this scope — do not skip or comment out failing tests.
+- Every module in `src/balagan/core/` has a corresponding
+  `tests/test_<module>.py`.
+- CLI, GUI and IO are tested at integration level only — no committed Qt
+  unit tests; offscreen smoke checks are throwaway.
+- Tests use a stub `nn.Module` (`z_dim=4`, `w_dim=4`, `num_ws=2`,
+  `img_resolution=64`) for snapshot loading; never real `.pkl` files.
+- Run `uv run pytest` before declaring any task complete. If a test fails,
+  fix it or explain why it can't be fixed in this scope — don't skip or
+  comment out failing tests.
 
 ## Things that will trip you up
 
-**The interpolator's t-coordinate construction is non-obvious.** The math is described in IMPLEMENTATION.md (interpolator section). The key invariants: strictly monotonic, perceptually weighted within phases, floored to avoid stalls in flat-FID regions. If your implementation passes the tests in `tests/test_interpolator.py`, you've got it right.
+**The interpolator's t-coordinate construction.** Strictly monotonic,
+perceptually weighted within phases (rolling-mean smoothed |ΔFID|, floored
+to avoid stalls in flat-FID regions), phase boundaries pinned exactly. If
+your implementation passes `tests/test_interpolator.py`, you've got it
+right.
 
-**The rolling window with a fixed canonical slot.** The canonical snapshot always occupies one slot of `window_size`. The remaining slots distribute around the current pair with symmetric padding, clamped at snapshot list edges. The example in IMPLEMENTATION.md (20 snapshots, canonical at index 6, current pair at (18, 19), window_size=8) produces `{6, 13, 14, 15, 16, 17, 18, 19}` and is the canonical test case.
+**The rolling window with a fixed canonical slot.** The canonical snapshot
+always occupies one slot of `window_size`; the remaining slots distribute
+around the current pair with symmetric padding, clamped at list edges. The
+canonical is never double-counted. See
+`src/balagan/core/snapshot_manager.py::_compute_window` and the
+`test_window_*` cases in `tests/test_snapshot_manager.py`.
 
-**The seed-grid bilinear and the autolume drag pattern are not invented here.** They come from NVIDIA's StyleGAN3 visualizer and Metacreation Lab's Autolume respectively. URLs are in the bootstrap prompt. Re-read those sources rather than reconstructing from memory.
+**The seed-grid bilinear is not invented here.** It mirrors NVIDIA's
+StyleGAN3 visualizer (`stylegan3/viz/latent_widget.py` ~lines 67-77 and
+`stylegan3/viz/renderer.py` ~lines 264-282). The Autolume mouse-drag scale
+comes from Metacreation Lab's autolume
+(`autolume/widgets/latent_widget.py` ~lines 82-85: `delta / font_size *
+4e-2`). Re-read those sources before changing
+`src/balagan/core/latent_navigator.py` — don't reconstruct from memory.
 
-**Weight-space blending requires the prototype's specific approach.** Cache state_dicts at load time (not per-frame), pre-allocate one blend target generator, lerp in-place into its tensors. Do not call `state_dict()` per frame; that allocates and is slow. Do not construct new generators per frame.
+**Weight-space blending requires the prototype's specific approach.**
+Cache each snapshot's `state_dict()` at load time, pre-allocate one
+blend-target generator, lerp in-place into its tensors per call. Never
+call `state_dict()` on the per-frame path; never construct new generators
+per frame. See `src/balagan/core/weight_blender.py`.
 
-**Z→W mapping uses ONLY the canonical model's mapping network.** Not the active pair's. Not "whichever is closest." Always the canonical. This is what gives the work its BalaGAN-faithful chimera behavior: latent geometry is fixed, only the synthesis varies.
+**Z→W mapping uses ONLY the canonical model's mapping network.** Not the
+active pair's. Not "whichever is closest." Always the canonical. This is
+what gives BalaGAN its chimera behavior: latent geometry is fixed, only
+synthesis varies.
+
+**`render_frame` derives the whole frame from one atomic snapshot view.**
+`SnapshotManager.loaded_networks()` returns a lock-guarded copy of the
+resident networks; `render_frame` uses that single view for the blender
+cache, the pair choice, AND the blend. Re-reading the manager mid-frame
+races the background loader and has previously produced `KeyError` crashes
+that killed the render thread.
 
 ## Things not to do
 
-Do not add features beyond what IMPLEMENTATION.md specifies. If you think something is missing, raise it in your status report and let the human decide.
-
-Do not refactor files you weren't asked to touch.
-
-Do not add new dependencies without checking the spec — it lists the allowed set.
-
-Do not introduce frame-space blending as a fallback. Weight-space only.
-
-Do not implement zero-copy CUDA-OpenGL interop. CPU roundtrip in v1.
-
-Do not implement hot-reload of config. Restart required.
-
-Do not modify the `stylegan3/` submodule or the `prototypes/` directory.
-
-Do not generate large amounts of synthetic test data, model files, or sample images. Tests use stub modules, not real models.
+- Do not introduce frame-space blending as a fallback. Weight-space only.
+- Do not implement zero-copy CUDA/OpenGL interop. CPU roundtrip is fine.
+- Do not implement hot-reload of the config. Restart required.
+- Do not modify `stylegan3/` (vendored submodule) or `prototypes/`
+  (exploratory code).
+- Do not generate large amounts of synthetic test data, model files, or
+  sample images. Tests use stub modules.
+- Do not commit phase-config JSONs. They are training-run-specific and
+  live with the training run, not in version control.
+- Do not refactor files you weren't asked to touch.
+- Do not add features without explicit user authorization. If something
+  seems missing, flag it in your status report and let the human decide.
 
 ## Working with the human
 
-Work through `IMPLEMENTATION.md`'s "Implementation order" one step at a time. Stop after each step and report status:
+For non-trivial multi-step tasks, stop after each step and report:
 
 - What was completed
 - What tests pass
 - What you noticed but didn't change
 - What the next step is
 
-Wait for explicit "continue" before proceeding. The human is using this checkpoint pattern to catch design issues early.
+Wait for an explicit "continue" before proceeding.
 
-If you encounter a genuine ambiguity in the spec — not a "could be done two ways" but a "the spec contradicts itself" or "the spec doesn't say" — ask, don't guess. Pick the most conservative interpretation if forced to proceed.
+If you find a bug or design flaw in existing code while working on
+something else, note it in your status report. Do not fix it in the same
+change unless explicitly asked.
 
-If you find a bug or design flaw in existing code while working on something else, note it in your status report. Do not fix it in the same change unless explicitly asked.
+If you hit a genuine ambiguity — not "could be done two ways" but "the
+request contradicts itself" or "doesn't say" — ask, don't guess. If forced
+to proceed, pick the most conservative interpretation.
+
+Commits only when explicitly asked. Match the project's commit style (short
+imperative title; optional explanatory body). Never add links to Claude or
+claude.ai sessions in commit messages or PRs.

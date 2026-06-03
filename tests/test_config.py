@@ -47,7 +47,7 @@ def write_run_dir(
     tmp_path: Path, pkl_kimgs: list[int], fid_by_kimg: dict[int, float]
 ) -> Path:
     """Create a synthetic run folder: empty snapshot .pkl files plus a
-    metric-fid50k_full.jsonl in the StyleGAN2-ADA format."""
+    metric-fid50k_full.jsonl in the StyleGAN format."""
     run_dir = tmp_path / "run"
     run_dir.mkdir(exist_ok=True)
     for kimg in pkl_kimgs:

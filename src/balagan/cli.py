@@ -121,7 +121,7 @@ def _run_gui(engine, osc_server, run_dir, output_name) -> None:
     help="Log file directory.",
 )
 def main(run_dir, config_path, headless, debug, osc_port, output_name, device, window_size, log_dir):
-    """Real-time interpolation engine blending StyleGAN2-ADA training snapshots."""
+    """Real-time interpolation engine blending StyleGAN training snapshots."""
     from balagan.logging_config import setup_logging
 
     setup_logging(log_dir)
