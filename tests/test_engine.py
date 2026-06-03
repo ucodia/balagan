@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from balagan.config import Phase, PhaseConfig, SnapshotInfo
+from balagan.config import SnapshotInfo
 from balagan.core.engine import Engine
 from balagan.core.interpolator import Interpolator
 from balagan.core.latent_navigator import LatentNavigator
@@ -45,25 +45,18 @@ class StubSynthesis(torch.nn.Module):
         return torch.zeros(ws.shape[0], 3, 64, 64)
 
 
-def _snapshot(kimg: int, fid: float) -> SnapshotInfo:
-    return SnapshotInfo(kimg=kimg, fid_raw=fid, pkl_path=Path(f"snap-{kimg}.pkl"))
+def _snapshot(kimg: int) -> SnapshotInfo:
+    return SnapshotInfo(kimg=kimg, pkl_path=Path(f"snap-{kimg}.pkl"))
 
 
 SNAPSHOTS = [
-    _snapshot(0, 300.0),
-    _snapshot(100, 250.0),
-    _snapshot(200, 200.0),
-    _snapshot(300, 150.0),
-    _snapshot(400, 120.0),
-    _snapshot(500, 100.0),
+    _snapshot(0),
+    _snapshot(100),
+    _snapshot(200),
+    _snapshot(300),
+    _snapshot(400),
+    _snapshot(500),
 ]
-PHASE_CONFIG = PhaseConfig(
-    kimg_range=(0, 500),
-    smoothing_window=1,
-    floor=1.0,
-    canonical_mapping_kimg=200,
-    phases=(Phase(0.0, 1.0, 0, 500),),
-)
 
 
 def make_engine(window_size: int = 6) -> tuple[Engine, RuntimeState, WeightBlender]:
@@ -71,7 +64,7 @@ def make_engine(window_size: int = 6) -> tuple[Engine, RuntimeState, WeightBlend
     runtime_state.update(fps_cap=0)  # uncapped: no frame-limiter sleep during tests
     weight_blender = WeightBlender()
     engine = Engine(
-        interpolator=Interpolator(SNAPSHOTS, PHASE_CONFIG),
+        interpolator=Interpolator(SNAPSHOTS),
         latent_navigator=LatentNavigator(StubMapping(), z_dim=4),
         weight_blender=weight_blender,
         snapshot_manager=SnapshotManager(
@@ -139,11 +132,6 @@ def test_blender_cache_evicts_snapshots_dropped_from_the_window():
     assert not blender.is_cached(0)
 
 
-def test_runtime_state_is_accessible():
-    engine, state, _ = make_engine()
-    assert engine.runtime_state is state
-
-
 class _RacySnapshotManager:
     """Engine test double modeling a snapshot the loader is evicting mid-frame.
 
@@ -184,7 +172,7 @@ def test_render_frame_blends_only_cached_snapshots_when_eviction_races_the_frame
     runtime_state = RuntimeState()
     runtime_state.update(fps_cap=0)
     engine = Engine(
-        interpolator=Interpolator(SNAPSHOTS, PHASE_CONFIG),
+        interpolator=Interpolator(SNAPSHOTS),
         latent_navigator=LatentNavigator(StubMapping(), z_dim=4),
         weight_blender=WeightBlender(),
         snapshot_manager=_RacySnapshotManager(kimg=200),

@@ -111,6 +111,8 @@ class ControlPanel(QWidget):
         layout.addWidget(self._status)
         layout.addStretch(1)
 
+        self.setMinimumWidth(round(self.sizeHint().width() * 1.3))
+
         self._bound_widgets = (
             self._position,
             self._seed_x,

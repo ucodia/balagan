@@ -12,9 +12,9 @@ from balagan.gui.viewport import Viewport
 class MainWindow(QMainWindow):
     """The application window; owns the render worker that drives the engine loop."""
 
-    def __init__(self, engine, run_dir, output_name: str) -> None:
+    def __init__(self, engine, snapshots_dir, output_name: str) -> None:
         super().__init__()
-        self.setWindowTitle(f"BalaGAN — {Path(run_dir).name}")
+        self.setWindowTitle(f"BalaGAN — {Path(snapshots_dir).name}")
 
         runtime_state = engine.runtime_state
         self._viewport = Viewport(runtime_state)

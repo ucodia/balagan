@@ -22,7 +22,6 @@ def make_snapshots(count: int) -> list[SnapshotInfo]:
     return [
         SnapshotInfo(
             kimg=index * 100,
-            fid_raw=float(count - index),
             pkl_path=Path(f"network-snapshot-{index * 100:06d}.pkl"),
         )
         for index in range(count)

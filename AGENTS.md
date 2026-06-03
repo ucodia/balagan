@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository.
 
 A real-time weight-interpolation engine that blends StyleGAN snapshots
 from a single training run, driven by an audience-position scalar in `[0, 1]`
-that maps through a phase-aware, FID-weighted trajectory. It was built for an
+that linearly sweeps across an operator-curated sequence of snapshots. It was built for an
 interactive installation where audience proximity to a wall drives the model's
 "nightmare level" through training — that context informs design choices like
 the normalized 0→1 position, the headless mode for venue use, and the
@@ -17,13 +17,13 @@ conservative default FPS cap.
 ```
 balagan/
 ├── src/balagan/
-│   ├── cli.py                  # `balagan` entry point (--headless, --debug)
-│   ├── config.py               # phase-config JSON + run-folder validation
+│   ├── cli.py                  # `balagan` entry point (--headless, --debug, --canonical-kimg)
+│   ├── config.py               # run-folder scan + canonical defaulting
 │   ├── logging_config.py       # console + daily-rotating file
 │   ├── core/                   # the pipeline; imports neither gui nor io
 │   │   ├── canonical_mapping.py
 │   │   ├── engine.py           # per-frame orchestration
-│   │   ├── interpolator.py     # phase-aware FID-weighted t-coord mapping
+│   │   ├── interpolator.py     # naive linear t→snapshot-pair mapping
 │   │   ├── latent_navigator.py # seed-grid bilinear z→w
 │   │   ├── runtime_state.py    # thread-safe shared state
 │   │   ├── snapshot_manager.py # rolling window + background loader
@@ -50,7 +50,7 @@ balagan/
 ```bash
 git submodule update --init --recursive   # required before first uv sync
 uv sync                                    # install deps + build the project
-uv run pytest                              # full suite (~98 tests)
+uv run pytest                              # full suite (~87 tests)
 uv run pytest tests/test_<module>.py -v    # focused
 uv run balagan --help                      # CLI surface
 uv run ruff check src/ tests/              # lint (if ruff is configured)
@@ -116,12 +116,6 @@ rules.
 
 ## Things that will trip you up
 
-**The interpolator's t-coordinate construction.** Strictly monotonic,
-perceptually weighted within phases (rolling-mean smoothed |ΔFID|, floored
-to avoid stalls in flat-FID regions), phase boundaries pinned exactly. If
-your implementation passes `tests/test_interpolator.py`, you've got it
-right.
-
 **The rolling window with a fixed canonical slot.** The canonical snapshot
 always occupies one slot of `window_size`; the remaining slots distribute
 around the current pair with symmetric padding, clamped at list edges. The
@@ -164,8 +158,6 @@ that killed the render thread.
   (exploratory code).
 - Do not generate large amounts of synthetic test data, model files, or
   sample images. Tests use stub modules.
-- Do not commit phase-config JSONs. They are training-run-specific and
-  live with the training run, not in version control.
 - Do not refactor files you weren't asked to touch.
 - Do not add features without explicit user authorization. If something
   seems missing, flag it in your status report and let the human decide.

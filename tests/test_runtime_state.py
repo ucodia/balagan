@@ -53,7 +53,7 @@ def test_snapshot_is_unaffected_by_later_updates():
 
 def test_update_rejects_an_unknown_field():
     state = RuntimeState()
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="unexpected keyword"):
         state.update(nightmare_level=1.0)
 
 

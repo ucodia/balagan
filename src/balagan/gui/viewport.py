@@ -15,12 +15,29 @@ class Viewport(QWidget):
         self._image = QImage()
         self._dragging = False
         self._last_pos = None
+        self._sized_to_frame = False
         self.setMinimumSize(512, 512)
 
     def update_frame(self, image: QImage) -> None:
-        """Slot for RenderWorker.frame_ready: store the frame and request a repaint."""
+        """Slot for RenderWorker.frame_ready: store the frame and request a repaint.
+
+        On the first frame, grow the window so the viewport shows the snapshot at
+        its native pixel resolution; afterwards the window stays freely resizable.
+        """
         self._image = image
+        if not self._sized_to_frame and not image.isNull():
+            self._sized_to_frame = True
+            self._resize_window_to_frame(image.width(), image.height())
         self.update()
+
+    def _resize_window_to_frame(self, frame_width: int, frame_height: int) -> None:
+        """Resize the top-level window by the viewport's gap to the frame size, so
+        the viewport ends up at the frame's native resolution while the control
+        panel and window chrome keep their own widths."""
+        window = self.window()
+        delta_w = frame_width - self.width()
+        delta_h = frame_height - self.height()
+        window.resize(window.width() + delta_w, window.height() + delta_h)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)

@@ -17,9 +17,10 @@ def test_resolve_device_auto_picks_an_available_backend():
 def test_cli_help_lists_options():
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
-    assert "--run-dir" in result.output
+    assert "--snapshots-dir" in result.output
     assert "--headless" in result.output
     assert "--debug" in result.output
+    assert "--canonical-kimg" in result.output
 
 
 def test_cli_errors_without_required_options():

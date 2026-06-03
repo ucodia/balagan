@@ -199,15 +199,15 @@ def build_engine(
     inside the loaders, so ``stylegan3/`` must be on ``sys.path`` before the
     returned engine is primed.
     """
-    canonical_kimg = config.phase_config.canonical_mapping_kimg
-    canonical_pkl = config.run_dir / f"network-snapshot-{canonical_kimg:06d}.pkl"
+    canonical_kimg = config.canonical_mapping_kimg
+    canonical_pkl = config.snapshots_dir / f"network-snapshot-{canonical_kimg:06d}.pkl"
     canonical_mapping = load_canonical_mapping(canonical_pkl, device)
 
     def snapshot_loader(pkl_path) -> torch.nn.Module:
         return load_network_pkl(pkl_path)["G_ema"].synthesis.to(device)
 
     engine = Engine(
-        interpolator=Interpolator(config.snapshots, config.phase_config),
+        interpolator=Interpolator(config.snapshots),
         latent_navigator=LatentNavigator(canonical_mapping, z_dim=canonical_mapping.z_dim),
         weight_blender=WeightBlender(),
         snapshot_manager=SnapshotManager(

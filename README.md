@@ -31,7 +31,7 @@ uv sync
 ## Usage
 
 ```bash
-uv run balagan --run-dir <training-run-folder> --config <path-to-phase-config.json>
+uv run balagan --snapshots-dir <training-run-folder>
 ```
 
 Pass `--headless` to run without the GUI. List all options:

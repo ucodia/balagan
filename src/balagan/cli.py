@@ -54,7 +54,7 @@ def _run_headless(engine, osc_server, output_name) -> None:
         osc_server.stop()
 
 
-def _run_gui(engine, osc_server, run_dir, output_name) -> None:
+def _run_gui(engine, osc_server, snapshots_dir, output_name) -> None:
     """Start the OSC server and run the PySide6 GUI until the window closes."""
     from PySide6.QtWidgets import QApplication
 
@@ -63,7 +63,7 @@ def _run_gui(engine, osc_server, run_dir, output_name) -> None:
     osc_server.start()
     engine.prime()  # eager initial load before the window appears
     app = QApplication([])
-    window = MainWindow(engine, run_dir, output_name)
+    window = MainWindow(engine, snapshots_dir, output_name)
     window.show()
     logger.info("GUI window opened")
     try:
@@ -74,17 +74,16 @@ def _run_gui(engine, osc_server, run_dir, output_name) -> None:
 
 @click.command()
 @click.option(
-    "--run-dir",
+    "--snapshots-dir",
     required=True,
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Path to the training run folder.",
 )
 @click.option(
-    "--config",
-    "config_path",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Path to the phase config JSON.",
+    "--canonical-kimg",
+    type=int,
+    default=None,
+    help="Override the canonical mapping snapshot's kimg (default: middle of the sorted snapshots).",
 )
 @click.option(
     "--headless",
@@ -120,7 +119,7 @@ def _run_gui(engine, osc_server, run_dir, output_name) -> None:
     show_default=True,
     help="Log file directory.",
 )
-def main(run_dir, config_path, headless, debug, osc_port, output_name, device, window_size, log_dir):
+def main(snapshots_dir, canonical_kimg, headless, debug, osc_port, output_name, device, window_size, log_dir):
     """Real-time interpolation engine blending StyleGAN training snapshots."""
     from balagan.logging_config import setup_logging
 
@@ -138,10 +137,10 @@ def main(run_dir, config_path, headless, debug, osc_port, output_name, device, w
 
     _ensure_stylegan3_on_path()
 
-    from balagan.config import ConfigError, load_config
+    from balagan.config import ConfigError, load_run
 
     try:
-        config = load_config(config_path, run_dir)
+        config = load_run(snapshots_dir, canonical_kimg)
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -154,7 +153,7 @@ def main(run_dir, config_path, headless, debug, osc_port, output_name, device, w
     if headless:
         _run_headless(engine, osc_server, output_name)
     else:
-        _run_gui(engine, osc_server, run_dir, output_name)
+        _run_gui(engine, osc_server, snapshots_dir, output_name)
 
 
 if __name__ == "__main__":
