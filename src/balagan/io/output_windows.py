@@ -26,8 +26,12 @@ class SpoutOutput:
     def send(self, frame_uint8_rgb: np.ndarray) -> None:
         """Publish a [H, W, 3] uint8 RGB frame to the Spout sender."""
         self._rgba[:, :, :3] = frame_uint8_rgb
+        # Pass the contiguous RGBA array straight through the buffer protocol.
+        # ``sendImage`` accepts any buffer, so materializing a fresh ``bytes``
+        # via ``.tobytes()`` would only add a full-frame copy + allocation per
+        # frame.
         self._sender.sendImage(
-            self._rgba.tobytes(), self._width, self._height, GL_RGBA, False, 0
+            self._rgba, self._width, self._height, GL_RGBA, False, 0
         )
 
     def close(self) -> None:
