@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from balagan.config import EngineConfig, SnapshotInfo
@@ -244,3 +245,93 @@ def test_debug_overlay_skips_an_empty_status():
     state.update(debug=True)
     frame = engine.render_frame()
     assert np.array_equal(frame, np.full((64, 64, 3), 128, np.uint8))
+
+
+class _FakeClock:
+    """Deterministic stand-in for the ``time`` module the engine calls.
+
+    ``perf_counter`` reads the virtual clock; ``sleep`` advances it (recording
+    each duration); ``advance`` simulates work elapsing between calls.
+    """
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+        self.sleeps: list[float] = []
+
+    def perf_counter(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_limit_framerate_absorbs_post_render_overhead(monkeypatch):
+    """The limiter must hold a steady 1/cap frame period even when the caller
+    does work *after* render_frame returns (Spout send, QImage copy). This is
+    the regression test for the absolute-deadline scheduler: relative-per-frame
+    scheduling stacks the post-render overhead on top of the cap every frame."""
+    engine, _, _ = make_engine()
+    clock = _FakeClock()
+    monkeypatch.setattr("balagan.core.engine.time", clock)
+
+    fps_cap = 30
+    period = 1.0 / fps_cap
+    render = 0.005  # render work inside render_frame
+    post = 0.006  # post-render overhead the limiter never sees directly
+    starts = []
+    for _ in range(12):
+        starts.append(clock.now)
+        clock.advance(render)
+        engine._limit_framerate(fps_cap, starts[-1])
+        clock.advance(post)
+
+    # First period warms up the deadline; every period after locks to 1/cap,
+    # the post-render overhead absorbed into the next frame's shorter sleep.
+    periods = [b - a for a, b in zip(starts, starts[1:])]
+    for measured in periods[1:]:
+        assert measured == pytest.approx(period, abs=1e-9)
+
+
+def test_limit_framerate_disabled_resets_deadline_and_never_sleeps(monkeypatch):
+    """fps_cap <= 0 must return immediately without sleeping and clear the
+    deadline so a later re-enable re-anchors cleanly."""
+    engine, _, _ = make_engine()
+    clock = _FakeClock()
+    monkeypatch.setattr("balagan.core.engine.time", clock)
+
+    engine._limit_framerate(30, clock.now)  # establish a deadline
+    assert engine._next_deadline is not None
+
+    clock.sleeps.clear()
+    engine._limit_framerate(0, clock.now)
+    assert engine._next_deadline is None
+    assert clock.sleeps == []
+
+
+def test_limit_framerate_resyncs_after_a_stall(monkeypatch):
+    """After a stall longer than the period, the limiter must snap the deadline
+    forward to now+period rather than fast-forwarding through frames with a
+    burst of zero-length sleeps to 'catch up'."""
+    engine, _, _ = make_engine()
+    clock = _FakeClock()
+    monkeypatch.setattr("balagan.core.engine.time", clock)
+
+    fps_cap = 30
+    period = 1.0 / fps_cap
+    engine._limit_framerate(fps_cap, clock.now)  # warm up
+
+    clock.advance(period * 5)  # render work far exceeds the budget
+    clock.sleeps.clear()
+    engine._limit_framerate(fps_cap, clock.now)
+    assert clock.sleeps == []  # behind schedule: no sleep
+    assert engine._next_deadline == pytest.approx(clock.now + period, abs=1e-9)
+
+    # The next frame sleeps a normal amount, not a catch-up burst.
+    frame_start = clock.now
+    clock.advance(0.001)
+    engine._limit_framerate(fps_cap, frame_start)
+    assert clock.sleeps[-1] == pytest.approx(period - 0.001, abs=1e-9)

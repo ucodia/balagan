@@ -67,6 +67,7 @@ class Engine:
 
         self._blender_cached: set[int] = set()
         self._last_frame_start: float | None = None
+        self._next_deadline: float | None = None
         self._last_log_time = time.perf_counter()
         self._frames_since_log = 0
         self._last_status = ""
@@ -169,11 +170,27 @@ class Engine:
             self._blender_cached.discard(kimg)
 
     def _limit_framerate(self, fps_cap: int, frame_start: float) -> None:
+        # Schedule against an absolute deadline rather than each frame's own
+        # start. A relative budget only compensates for time spent inside
+        # render_frame, so the caller's post-render work (Spout send, the GUI's
+        # QImage copy) stacks on top of the cap every frame and the engine
+        # never reaches it. Anchoring to a fixed timeline lets that overhead be
+        # absorbed into the next frame's shorter sleep.
         if fps_cap <= 0:
+            self._next_deadline = None  # reset so re-enabling re-anchors cleanly
             return
-        remaining = (1.0 / fps_cap) - (time.perf_counter() - frame_start)
+        period = 1.0 / fps_cap
+        if self._next_deadline is None:
+            self._next_deadline = frame_start + period
+        remaining = self._next_deadline - time.perf_counter()
         if remaining > 0.0:
             time.sleep(remaining)
+        self._next_deadline += period
+        now = time.perf_counter()
+        if self._next_deadline < now:
+            # Fell a full period behind (stall, or work > budget): resync rather
+            # than fast-forwarding through frames with zero-length sleeps.
+            self._next_deadline = now + period
 
     def _report(self, position: float, kimg_a: int, kimg_b: int, alpha: float) -> None:
         self._frames_since_log += 1
