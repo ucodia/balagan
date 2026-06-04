@@ -106,9 +106,11 @@ class Engine:
 
         state = self._runtime_state.snapshot()
         latent_x = state.latent_x
+        latent_y = state.latent_y
         if state.anim_playing:
-            latent_x = state.latent_x + state.anim_speed * delta
-            self._runtime_state.update(latent_x=latent_x)
+            latent_x = state.latent_x + state.anim_speed_x * delta
+            latent_y = state.latent_y + state.anim_speed_y * delta
+            self._runtime_state.update(latent_x=latent_x, latent_y=latent_y)
 
         kimg_a, kimg_b, alpha = self._interpolator(state.position)
         self._snapshot_manager.set_active_pair(kimg_a, kimg_b)
@@ -132,7 +134,7 @@ class Engine:
             )
 
         with torch.no_grad():
-            ws = self._latent_navigator(latent_x, state.latent_y, state.truncation_psi)
+            ws = self._latent_navigator(latent_x, latent_y, state.truncation_psi)
             synthesis = self._weight_blender(render_a, render_b, alpha)
             image = synthesis(ws=ws.unsqueeze(0), noise_mode="const")[0]
             frame = _to_uint8_hwc(image)

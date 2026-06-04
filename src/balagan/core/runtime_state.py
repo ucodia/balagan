@@ -12,7 +12,8 @@ class StateSnapshot:
     latent_x: float = 0.0
     latent_y: float = 0.0
     anim_playing: bool = False
-    anim_speed: float = 0.25
+    anim_speed_x: float = 0.25
+    anim_speed_y: float = 0.0
     truncation_psi: float = 0.7
     fps_cap: int = 30
     spout_syphon_enabled: bool = False

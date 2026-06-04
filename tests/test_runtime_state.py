@@ -15,7 +15,8 @@ def test_defaults_match_the_spec():
     assert snap.latent_x == 0.0
     assert snap.latent_y == 0.0
     assert snap.anim_playing is False
-    assert snap.anim_speed == 0.25
+    assert snap.anim_speed_x == 0.25
+    assert snap.anim_speed_y == 0.0
     assert snap.truncation_psi == 0.7
     assert snap.fps_cap == 30
     assert snap.spout_syphon_enabled is False
@@ -70,7 +71,7 @@ def test_concurrent_updates_do_not_lose_writes():
         threading.Thread(target=hammer, args=("position", 1.0)),
         threading.Thread(target=hammer, args=("latent_x", 99.0)),
         threading.Thread(target=hammer, args=("truncation_psi", 0.5)),
-        threading.Thread(target=hammer, args=("anim_speed", 3.0)),
+        threading.Thread(target=hammer, args=("anim_speed_x", 3.0)),
     ]
     for thread in threads:
         thread.start()
@@ -81,4 +82,4 @@ def test_concurrent_updates_do_not_lose_writes():
     assert snap.position == 1.0
     assert snap.latent_x == 99.0
     assert snap.truncation_psi == 0.5
-    assert snap.anim_speed == 3.0
+    assert snap.anim_speed_x == 3.0

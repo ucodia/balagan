@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -74,7 +75,8 @@ class ControlPanel(QWidget):
             self._seed_x,
             self._seed_y,
             self._play,
-            self._speed,
+            self._speed_x,
+            self._speed_y,
             self._truncation,
             self._fps_cap,
             self._output,
@@ -113,19 +115,51 @@ class ControlPanel(QWidget):
         layout.addWidget(self._window_size_input)
         return group
 
+    def _slider_row(
+        self, title: str, slider: QSlider, value_text: str
+    ) -> tuple[QVBoxLayout, QLabel]:
+        """Build a labeled slider block: a header with the title left-aligned and
+        the value right-aligned, with the slider below. Returns the layout and the
+        value label so the caller can refresh the displayed value."""
+        box = QVBoxLayout()
+        header = QHBoxLayout()
+        header.addWidget(QLabel(title))
+        header.addStretch(1)
+        value = QLabel(value_text)
+        value.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        header.addWidget(value)
+        box.addLayout(header)
+        box.addWidget(slider)
+        return box, value
+
     def _build_navigation_group(self, state) -> QGroupBox:
         group = QGroupBox("Navigation")
         layout = QVBoxLayout(group)
 
-        self._position_label = QLabel(f"Position: {state.position:.3f}")
-        layout.addWidget(self._position_label)
         self._position = QSlider(Qt.Orientation.Horizontal)
         self._position.setRange(0, _POSITION_STEPS)
         self._position.setValue(round(state.position * _POSITION_STEPS))
         self._position.valueChanged.connect(self._on_position)
-        layout.addWidget(self._position)
+        position_row, self._position_value = self._slider_row(
+            "Position", self._position, f"{state.position:.3f}"
+        )
+        layout.addLayout(position_row)
 
-        layout.addWidget(QLabel("Seed X / Y"))
+        self._truncation = QSlider(Qt.Orientation.Horizontal)
+        self._truncation.setRange(0, _POSITION_STEPS)
+        self._truncation.setValue(round(state.truncation_psi * _POSITION_STEPS))
+        self._truncation.valueChanged.connect(self._on_truncation)
+        truncation_row, self._truncation_value = self._slider_row(
+            "Truncation", self._truncation, f"{state.truncation_psi:.2f}"
+        )
+        layout.addLayout(truncation_row)
+
+        grid = QGridLayout()
+        grid.addWidget(QLabel("Seed X"), 0, 0)
+        grid.addWidget(QLabel("Seed Y"), 0, 1)
+
         self._seed_x = QDoubleSpinBox()
         self._seed_x.setRange(-1e6, 1e6)
         self._seed_x.setSingleStep(1.0)
@@ -133,7 +167,8 @@ class ControlPanel(QWidget):
         self._seed_x.valueChanged.connect(
             lambda v: self._runtime_state.update(latent_x=v)
         )
-        layout.addWidget(self._seed_x)
+        grid.addWidget(self._seed_x, 1, 0)
+
         self._seed_y = QDoubleSpinBox()
         self._seed_y.setRange(-1e6, 1e6)
         self._seed_y.setSingleStep(1.0)
@@ -141,31 +176,33 @@ class ControlPanel(QWidget):
         self._seed_y.valueChanged.connect(
             lambda v: self._runtime_state.update(latent_y=v)
         )
-        layout.addWidget(self._seed_y)
+        grid.addWidget(self._seed_y, 1, 1)
+
+        self._speed_x = QSlider(Qt.Orientation.Horizontal)
+        self._speed_x.setRange(-_SPEED_STEPS, _SPEED_STEPS)
+        self._speed_x.setValue(_speed_to_slider(state.anim_speed_x))
+        self._speed_x.valueChanged.connect(self._on_speed_x)
+        speed_x_row, self._speed_x_value = self._slider_row(
+            "Speed X", self._speed_x, f"{state.anim_speed_x:.2f}"
+        )
+        grid.addLayout(speed_x_row, 2, 0)
+
+        self._speed_y = QSlider(Qt.Orientation.Horizontal)
+        self._speed_y.setRange(-_SPEED_STEPS, _SPEED_STEPS)
+        self._speed_y.setValue(_speed_to_slider(state.anim_speed_y))
+        self._speed_y.valueChanged.connect(self._on_speed_y)
+        speed_y_row, self._speed_y_value = self._slider_row(
+            "Speed Y", self._speed_y, f"{state.anim_speed_y:.2f}"
+        )
+        grid.addLayout(speed_y_row, 2, 1)
 
         self._play = QPushButton("Pause" if state.anim_playing else "Play")
         self._play.setCheckable(True)
         self._play.setChecked(state.anim_playing)
         self._play.toggled.connect(self._on_play)
-        layout.addWidget(self._play)
+        grid.addWidget(self._play, 3, 0, 1, 2)
 
-        layout.addWidget(QLabel("Speed"))
-        self._speed = QSlider(Qt.Orientation.Horizontal)
-        self._speed.setRange(-_SPEED_STEPS, _SPEED_STEPS)
-        self._speed.setValue(_speed_to_slider(state.anim_speed))
-        self._speed.valueChanged.connect(
-            lambda v: self._runtime_state.update(anim_speed=_slider_to_speed(v))
-        )
-        layout.addWidget(self._speed)
-
-        layout.addWidget(QLabel("Truncation"))
-        self._truncation = QSlider(Qt.Orientation.Horizontal)
-        self._truncation.setRange(0, _POSITION_STEPS)
-        self._truncation.setValue(round(state.truncation_psi * _POSITION_STEPS))
-        self._truncation.valueChanged.connect(
-            lambda v: self._runtime_state.update(truncation_psi=v / _POSITION_STEPS)
-        )
-        layout.addWidget(self._truncation)
+        layout.addLayout(grid)
         return group
 
     def _build_output_group(self, state) -> QGroupBox:
@@ -244,7 +281,22 @@ class ControlPanel(QWidget):
     def _on_position(self, value: int) -> None:
         position = value / _POSITION_STEPS
         self._runtime_state.update(position=position)
-        self._position_label.setText(f"Position: {position:.3f}")
+        self._position_value.setText(f"{position:.3f}")
+
+    def _on_truncation(self, value: int) -> None:
+        psi = value / _POSITION_STEPS
+        self._runtime_state.update(truncation_psi=psi)
+        self._truncation_value.setText(f"{psi:.2f}")
+
+    def _on_speed_x(self, value: int) -> None:
+        speed = _slider_to_speed(value)
+        self._runtime_state.update(anim_speed_x=speed)
+        self._speed_x_value.setText(f"{speed:.2f}")
+
+    def _on_speed_y(self, value: int) -> None:
+        speed = _slider_to_speed(value)
+        self._runtime_state.update(anim_speed_y=speed)
+        self._speed_y_value.setText(f"{speed:.2f}")
 
     def _on_play(self, playing: bool) -> None:
         self._runtime_state.update(anim_playing=playing)
@@ -263,14 +315,18 @@ class ControlPanel(QWidget):
         self._seed_x.setValue(state.latent_x)
         self._seed_y.setValue(state.latent_y)
         self._play.setChecked(state.anim_playing)
-        self._speed.setValue(_speed_to_slider(state.anim_speed))
+        self._speed_x.setValue(_speed_to_slider(state.anim_speed_x))
+        self._speed_y.setValue(_speed_to_slider(state.anim_speed_y))
         self._truncation.setValue(round(state.truncation_psi * _POSITION_STEPS))
         self._fps_cap.setValue(state.fps_cap)
         self._output.setChecked(state.spout_syphon_enabled)
         self._debug.setChecked(state.debug)
         for widget in self._bound_widgets:
             widget.blockSignals(False)
-        self._position_label.setText(f"Position: {state.position:.3f}")
+        self._position_value.setText(f"{state.position:.3f}")
+        self._truncation_value.setText(f"{state.truncation_psi:.2f}")
+        self._speed_x_value.setText(f"{state.anim_speed_x:.2f}")
+        self._speed_y_value.setText(f"{state.anim_speed_y:.2f}")
         self._play.setText("Pause" if state.anim_playing else "Play")
 
     def update_status(self, status: str) -> None:

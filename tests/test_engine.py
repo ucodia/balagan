@@ -97,10 +97,32 @@ def test_renders_valid_frames_across_the_position_range():
 def test_anim_playing_advances_and_persists_latent_x():
     engine, state, _ = make_engine()
     engine.prime()
-    state.update(anim_playing=True, anim_speed=1000.0)
+    state.update(anim_playing=True, anim_speed_x=1000.0)
     engine.render_frame()  # first frame: zero delta, no advance
     engine.render_frame()  # second frame: real delta advances latent_x
     assert state.snapshot().latent_x > 0.0
+
+
+def test_anim_playing_advances_latent_y_with_speed_y():
+    engine, state, _ = make_engine()
+    engine.prime()
+    state.update(anim_playing=True, anim_speed_x=0.0, anim_speed_y=1000.0)
+    engine.render_frame()  # first frame: zero delta, no advance
+    engine.render_frame()  # second frame: real delta advances latent_y
+    snap = state.snapshot()
+    assert snap.latent_y > 0.0
+    assert snap.latent_x == 0.0
+
+
+def test_anim_default_leaves_latent_y_unchanged():
+    engine, state, _ = make_engine()
+    engine.prime()
+    state.update(anim_playing=True)  # anim_speed_y defaults to 0.0
+    engine.render_frame()
+    engine.render_frame()
+    snap = state.snapshot()
+    assert snap.latent_y == 0.0
+    assert snap.latent_x > 0.0
 
 
 def test_anim_disabled_leaves_latent_x_unchanged():

@@ -25,7 +25,7 @@ def _single_arg(address: str, args: tuple, converter):
 
 
 def _build_dispatcher(runtime_state: RuntimeState) -> Dispatcher:
-    """Build the OSC dispatcher mapping the six endpoints to state updates.
+    """Build the OSC dispatcher mapping the seven endpoints to state updates.
 
     Out-of-range position and truncation values are clamped rather than
     rejected; messages with missing or wrongly-typed arguments are logged as
@@ -53,10 +53,15 @@ def _build_dispatcher(runtime_state: RuntimeState) -> Dispatcher:
         if value is not None:
             runtime_state.update(anim_playing=bool(value))
 
-    def on_seed_speed(address: str, *args) -> None:
+    def on_seed_speed_x(address: str, *args) -> None:
         value = _single_arg(address, args, float)
         if value is not None:
-            runtime_state.update(anim_speed=value)
+            runtime_state.update(anim_speed_x=value)
+
+    def on_seed_speed_y(address: str, *args) -> None:
+        value = _single_arg(address, args, float)
+        if value is not None:
+            runtime_state.update(anim_speed_y=value)
 
     def on_truncation(address: str, *args) -> None:
         value = _single_arg(address, args, float)
@@ -64,10 +69,11 @@ def _build_dispatcher(runtime_state: RuntimeState) -> Dispatcher:
             runtime_state.update(truncation_psi=_clamp(value, 0.0, 1.0))
 
     dispatcher.map("/position", on_position)
-    dispatcher.map("/seed/x", on_seed_x)
-    dispatcher.map("/seed/y", on_seed_y)
-    dispatcher.map("/seed/anim", on_seed_anim)
-    dispatcher.map("/seed/speed", on_seed_speed)
+    dispatcher.map("/seedX", on_seed_x)
+    dispatcher.map("/seedY", on_seed_y)
+    dispatcher.map("/seedAnim", on_seed_anim)
+    dispatcher.map("/seedSpeedX", on_seed_speed_x)
+    dispatcher.map("/seedSpeedY", on_seed_speed_y)
     dispatcher.map("/truncation", on_truncation)
     return dispatcher
 

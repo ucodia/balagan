@@ -35,29 +35,35 @@ def test_position_value_is_clamped_to_the_unit_range():
 
 def test_seed_x_message_updates_latent_x():
     state = RuntimeState()
-    _dispatch(_build_dispatcher(state), "/seed/x", 1.5)
+    _dispatch(_build_dispatcher(state), "/seedX", 1.5)
     assert state.snapshot().latent_x == 1.5
 
 
 def test_seed_y_message_updates_latent_y():
     state = RuntimeState()
-    _dispatch(_build_dispatcher(state), "/seed/y", -2.5)
+    _dispatch(_build_dispatcher(state), "/seedY", -2.5)
     assert state.snapshot().latent_y == -2.5
 
 
 def test_seed_anim_message_toggles_playing():
     state = RuntimeState()
     dispatcher = _build_dispatcher(state)
-    _dispatch(dispatcher, "/seed/anim", 1)
+    _dispatch(dispatcher, "/seedAnim", 1)
     assert state.snapshot().anim_playing is True
-    _dispatch(dispatcher, "/seed/anim", 0)
+    _dispatch(dispatcher, "/seedAnim", 0)
     assert state.snapshot().anim_playing is False
 
 
-def test_seed_speed_message_updates_state():
+def test_seed_speed_x_message_updates_state():
     state = RuntimeState()
-    _dispatch(_build_dispatcher(state), "/seed/speed", 3.0)
-    assert state.snapshot().anim_speed == 3.0
+    _dispatch(_build_dispatcher(state), "/seedSpeedX", 3.0)
+    assert state.snapshot().anim_speed_x == 3.0
+
+
+def test_seed_speed_y_message_updates_state():
+    state = RuntimeState()
+    _dispatch(_build_dispatcher(state), "/seedSpeedY", -1.5)
+    assert state.snapshot().anim_speed_y == -1.5
 
 
 def test_truncation_message_updates_and_clamps():
