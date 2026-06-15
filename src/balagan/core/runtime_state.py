@@ -17,6 +17,7 @@ class StateSnapshot:
     truncation_psi: float = 0.7
     fps_cap: int = 30
     spout_syphon_enabled: bool = False
+    recording_enabled: bool = False
     debug: bool = False
 
 

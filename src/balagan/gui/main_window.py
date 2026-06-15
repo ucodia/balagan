@@ -121,6 +121,11 @@ class MainWindow(QMainWindow):
             self._osc_server.restart(previous)
         self._control_panel.set_osc_port(self._osc_server.port)
 
+    def _on_recording_failed(self, message: str) -> None:
+        QMessageBox.warning(
+            self, "Recording failed", f"Could not start recording:\n{message}"
+        )
+
     def _on_load_failed(self, message: str) -> None:
         self._config = None
         self._control_panel.set_engine_controls_enabled(False)
@@ -140,6 +145,8 @@ class MainWindow(QMainWindow):
         worker.loading_started.connect(self._viewport.start_loading)
         worker.loading_started.connect(self._control_panel.update_status)
         worker.load_failed.connect(self._on_load_failed)
+        worker.recording_changed.connect(self._control_panel.set_recording_path)
+        worker.recording_failed.connect(self._on_recording_failed)
         self._render_worker = worker
         worker.start()
 
@@ -154,7 +161,10 @@ class MainWindow(QMainWindow):
         worker.loading_started.disconnect(self._viewport.start_loading)
         worker.loading_started.disconnect(self._control_panel.update_status)
         worker.load_failed.disconnect(self._on_load_failed)
+        worker.recording_changed.disconnect(self._control_panel.set_recording_path)
+        worker.recording_failed.disconnect(self._on_recording_failed)
         worker.stop()
+        self._control_panel.set_recording_path("")
 
     def _update_title(self) -> None:
         title = f"BalaGAN v{_VERSION}"

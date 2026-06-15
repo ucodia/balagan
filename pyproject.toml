@@ -16,6 +16,8 @@ dependencies = [
     "python-osc",
     "click",
     "pillow",
+    "imageio",
+    "imageio-ffmpeg",
     "syphon-python ; sys_platform == 'darwin'",
     "SpoutGL ; sys_platform == 'win32'",
     "requests>=2.34.2",

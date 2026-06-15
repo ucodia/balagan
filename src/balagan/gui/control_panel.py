@@ -80,6 +80,7 @@ class ControlPanel(QWidget):
             self._truncation,
             self._fps_cap,
             self._output,
+            self._record,
             self._debug,
         )
         self._refresh_timer = QTimer(self)
@@ -225,6 +226,18 @@ class ControlPanel(QWidget):
         )
         layout.addWidget(self._output)
 
+        self._record = QPushButton(
+            "Stop recording" if state.recording_enabled else "Start recording"
+        )
+        self._record.setCheckable(True)
+        self._record.setChecked(state.recording_enabled)
+        self._record.toggled.connect(self._on_record)
+        layout.addWidget(self._record)
+
+        self._record_path = QLabel()
+        self._record_path.setWordWrap(True)
+        layout.addWidget(self._record_path)
+
         self._debug = QCheckBox("Debug overlay")
         self._debug.setChecked(state.debug)
         self._debug.toggled.connect(lambda on: self._runtime_state.update(debug=on))
@@ -302,6 +315,16 @@ class ControlPanel(QWidget):
         self._runtime_state.update(anim_playing=playing)
         self._play.setText("Pause" if playing else "Play")
 
+    def _on_record(self, recording: bool) -> None:
+        self._runtime_state.update(recording_enabled=recording)
+        self._record.setText("Stop recording" if recording else "Start recording")
+
+    def set_recording_path(self, path: str) -> None:
+        """Show where the active recording is being written, or clear the label
+        when recording stops. Driven by RenderWorker.recording_changed, so the
+        label reflects the file the render thread actually opened."""
+        self._record_path.setText(f"Recording → {path}" if path else "")
+
     def _refresh_from_state(self) -> None:
         """Pull current values from the runtime state into the widgets, so
         changes made via OSC, the viewport drag, or the animation walk show up
@@ -320,9 +343,13 @@ class ControlPanel(QWidget):
         self._truncation.setValue(round(state.truncation_psi * _POSITION_STEPS))
         self._fps_cap.setValue(state.fps_cap)
         self._output.setChecked(state.spout_syphon_enabled)
+        self._record.setChecked(state.recording_enabled)
         self._debug.setChecked(state.debug)
         for widget in self._bound_widgets:
             widget.blockSignals(False)
+        self._record.setText(
+            "Stop recording" if state.recording_enabled else "Start recording"
+        )
         self._position_value.setText(f"{state.position:.3f}")
         self._truncation_value.setText(f"{state.truncation_psi:.2f}")
         self._speed_x_value.setText(f"{state.anim_speed_x:.2f}")
