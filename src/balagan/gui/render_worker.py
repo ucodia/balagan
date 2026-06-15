@@ -22,7 +22,13 @@ class RenderWorker(QThread):
     load_failed = Signal(str)
 
     def __init__(
-        self, config, device, window_size: int, runtime_state, output_name: str
+        self,
+        config,
+        device,
+        window_size: int,
+        runtime_state,
+        output_name: str,
+        use_cuda_graph: bool = True,
     ) -> None:
         super().__init__()
         self._config = config
@@ -30,6 +36,7 @@ class RenderWorker(QThread):
         self._window_size = window_size
         self._runtime_state = runtime_state
         self._output_name = output_name
+        self._use_cuda_graph = use_cuda_graph
         self._engine = None
         self._output = None
         self._running = False
@@ -47,6 +54,7 @@ class RenderWorker(QThread):
                 self._device,
                 self._window_size,
                 self._runtime_state,
+                use_cuda_graph=self._use_cuda_graph,
             )
             self._engine.prime()
         except Exception as exc:  # noqa: BLE001 — surface any build/prime failure

@@ -81,6 +81,27 @@ def test_evict_snapshot_drops_the_cache_entry():
     assert blender.is_cached(200)
 
 
+def test_blend_into_target_never_returns_a_cached_network():
+    """Graph mode needs the persistent target every call -- even at alpha 0/1,
+    where __call__ would short-circuit to a cached net -- so its tensors keep
+    fixed addresses for CUDA-graph replay."""
+    blender, net_a, net_b = make_blender_with_pair()
+    at_zero = blender.blend_into_target(100, 200, 0.0)
+    at_one = blender.blend_into_target(100, 200, 1.0)
+    assert at_zero is at_one  # same pre-allocated target both times
+    assert at_zero is not net_a and at_zero is not net_b
+
+
+def test_blend_into_target_matches_the_source_sides_at_alpha_extremes():
+    """torch.lerp at alpha 0/1 reduces to copying a side, so the target holds
+    that snapshot's exact weights without special-casing."""
+    blender, _, _ = make_blender_with_pair(value_a=1.0, value_b=3.0)
+    at_zero = blender.blend_into_target(100, 200, 0.0)
+    assert torch.allclose(at_zero.weight, torch.full((2, 2), 1.0))
+    at_one = blender.blend_into_target(100, 200, 1.0)
+    assert torch.allclose(at_one.weight, torch.full((2, 2), 3.0))
+
+
 def test_blends_the_requested_pair_among_several():
     blender = WeightBlender()
     blender.cache_snapshot(100, StubNet(1.0, 0))

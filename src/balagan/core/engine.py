@@ -1,6 +1,7 @@
 """Per-frame render orchestration: the BalaGAN engine."""
 
 import logging
+import os
 import time
 
 import numpy as np
@@ -58,6 +59,7 @@ class Engine:
         weight_blender: WeightBlender,
         snapshot_manager: SnapshotManager,
         runtime_state: RuntimeState,
+        use_cuda_graph: bool = True,
     ) -> None:
         self._interpolator = interpolator
         self._latent_navigator = latent_navigator
@@ -65,12 +67,30 @@ class Engine:
         self._snapshot_manager = snapshot_manager
         self._runtime_state = runtime_state
 
+        # StyleGAN's synthesis forward is launch-bound (~100 tiny kernels per
+        # frame), so the GPU idles between launches. Capturing it as a CUDA graph
+        # replays the whole sequence with one submission. Captured lazily on the
+        # first CUDA frame; falls back to eager on non-CUDA or capture failure.
+        self._use_cuda_graph = use_cuda_graph
+        self._graph: torch.cuda.CUDAGraph | None = None
+        self._graph_static_ws: torch.Tensor | None = None
+        self._graph_static_out: torch.Tensor | None = None
+        self._graph_failed = False
+
         self._blender_cached: set[int] = set()
         self._last_frame_start: float | None = None
         self._next_deadline: float | None = None
         self._last_log_time = time.perf_counter()
         self._frames_since_log = 0
         self._last_status = ""
+
+        # Diagnostic phase profiling, enabled with BALAGAN_PROFILE=1. Each phase
+        # is CUDA-synchronized so GPU work is attributed to the phase that issued
+        # it; _report prints per-phase mean ms. Remove once the bottleneck is
+        # characterized. Off by default: the syncs serialize the pipeline.
+        self._profile = os.environ.get("BALAGAN_PROFILE") == "1"
+        self._cuda = torch.cuda.is_available()
+        self._phase_sums: dict[str, float] = {}
 
     @property
     def runtime_state(self) -> RuntimeState:
@@ -135,10 +155,37 @@ class Engine:
             )
 
         with torch.no_grad():
+            mark = self._profile_mark("setup", frame_start) if self._profile else 0.0
             ws = self._latent_navigator(latent_x, latent_y, state.truncation_psi)
-            synthesis = self._weight_blender(render_a, render_b, alpha)
-            image = synthesis(ws=ws.unsqueeze(0), noise_mode="const")[0]
+            ws_batched = ws.unsqueeze(0)
+            mark = self._profile_mark("navigator", mark) if self._profile else 0.0
+
+            graph_mode = (
+                self._use_cuda_graph and not self._graph_failed and ws_batched.is_cuda
+            )
+            # Graph mode always blends into the persistent target so the captured
+            # graph reads the same parameter tensors every frame.
+            if graph_mode:
+                synthesis = self._weight_blender.blend_into_target(
+                    render_a, render_b, alpha
+                )
+            else:
+                synthesis = self._weight_blender(render_a, render_b, alpha)
+            mark = self._profile_mark("blend", mark) if self._profile else 0.0
+
+            if graph_mode and self._graph is None:
+                self._capture_graph(synthesis, ws_batched)
+            if graph_mode and self._graph is not None:
+                self._graph_static_ws.copy_(ws_batched)
+                self._graph.replay()
+                image = self._graph_static_out
+            else:
+                image = synthesis(ws=ws_batched, noise_mode="const")[0]
+            mark = self._profile_mark("synthesis", mark) if self._profile else 0.0
+
             frame = _to_uint8_hwc(image)
+            if self._profile:
+                self._profile_mark("readback", mark)
 
         self._report(state.position, kimg_a, kimg_b, alpha)
         if state.debug:
@@ -169,6 +216,42 @@ class Engine:
             self._weight_blender.evict_snapshot(kimg)
             self._blender_cached.discard(kimg)
 
+    def _capture_graph(
+        self, synthesis: torch.nn.Module, ws_batched: torch.Tensor
+    ) -> None:
+        """Capture the synthesis forward as a CUDA graph for launch-free replay.
+
+        Warms up on a side stream first -- StyleGAN's custom ops cache plans and
+        cuDNN selects algorithms on early calls -- then captures. Replay reads
+        the synthesis parameters in place, so the weight blender can mutate them
+        per frame and the graph reflects the new weights (verified bit-identical
+        to eager). Any capture failure disables the path and falls back to eager.
+        """
+        try:
+            static_ws = ws_batched.clone()
+            side = torch.cuda.Stream()
+            side.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(side):
+                for _ in range(3):
+                    synthesis(ws=static_ws, noise_mode="const")
+            torch.cuda.current_stream().wait_stream(side)
+
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                static_out = synthesis(ws=static_ws, noise_mode="const")[0]
+        except Exception as exc:  # noqa: BLE001 -- any capture failure -> eager
+            self._graph_failed = True
+            logger.warning(
+                "CUDA graph capture failed (%s: %s); using eager synthesis",
+                type(exc).__name__,
+                exc,
+            )
+            return
+        self._graph = graph
+        self._graph_static_ws = static_ws
+        self._graph_static_out = static_out
+        logger.info("CUDA graph captured for the synthesis forward")
+
     def _limit_framerate(self, fps_cap: int, frame_start: float) -> None:
         # Schedule against an absolute deadline rather than each frame's own
         # start. A relative budget only compensates for time spent inside
@@ -192,15 +275,36 @@ class Engine:
             # than fast-forwarding through frames with zero-length sleeps.
             self._next_deadline = now + period
 
+    def _profile_mark(self, name: str, since: float) -> float:
+        """Accumulate the time since ``since`` under ``name`` and return now.
+
+        Synchronizes CUDA first so async GPU work is charged to the phase that
+        launched it rather than bleeding into the next one.
+        """
+        if self._cuda:
+            torch.cuda.synchronize()
+        now = time.perf_counter()
+        self._phase_sums[name] = self._phase_sums.get(name, 0.0) + (now - since)
+        return now
+
     def _report(self, position: float, kimg_a: int, kimg_b: int, alpha: float) -> None:
         self._frames_since_log += 1
         elapsed = time.perf_counter() - self._last_log_time
         if elapsed < 1.0:
             return
-        fps = f"{self._frames_since_log / elapsed:.1f} fps"
+        frames = self._frames_since_log
+        fps = f"{frames / elapsed:.1f} fps"
         blend = f"{kimg_a} → {kimg_b} ({round(alpha * 100)}%)"
         self._last_status = f"{fps} | {blend}"
-        logger.info("%s | t=%.3f | %s", fps, position, blend)
+        if self._profile and self._phase_sums:
+            phases = " ".join(
+                f"{name}={total / frames * 1e3:.1f}ms"
+                for name, total in self._phase_sums.items()
+            )
+            logger.info("%s | t=%.3f | %s | %s", fps, position, blend, phases)
+            self._phase_sums.clear()
+        else:
+            logger.info("%s | t=%.3f | %s", fps, position, blend)
         self._frames_since_log = 0
         self._last_log_time = time.perf_counter()
 
@@ -210,6 +314,7 @@ def build_engine(
     device: str | torch.device,
     window_size: int = 32,
     runtime_state: RuntimeState | None = None,
+    use_cuda_graph: bool = True,
 ) -> Engine:
     """Construct the full engine component graph from a validated config.
 
@@ -237,6 +342,7 @@ def build_engine(
             config.snapshots, canonical_kimg, snapshot_loader, window_size
         ),
         runtime_state=runtime_state if runtime_state is not None else RuntimeState(),
+        use_cuda_graph=use_cuda_graph,
     )
     logger.info(
         "Engine built: %d snapshots, device %s, window size %d",

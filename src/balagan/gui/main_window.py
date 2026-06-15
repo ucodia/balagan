@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         output_name: str,
         osc_server,
         initial_config=None,
+        use_cuda_graph: bool = True,
     ) -> None:
         super().__init__()
         self._runtime_state = runtime_state
@@ -39,6 +40,7 @@ class MainWindow(QMainWindow):
         self._window_size = window_size
         self._output_name = output_name
         self._osc_server = osc_server
+        self._use_cuda_graph = use_cuda_graph
         self._config = None
         self._render_worker: RenderWorker | None = None
 
@@ -134,6 +136,7 @@ class MainWindow(QMainWindow):
             self._window_size,
             self._runtime_state,
             self._output_name,
+            self._use_cuda_graph,
         )
         worker.frame_ready.connect(self._viewport.update_frame)
         worker.status_changed.connect(self._control_panel.update_status)

@@ -55,7 +55,7 @@ def _run_headless(engine, osc_server, output_name) -> None:
 
 
 def _run_gui(
-    initial_config, runtime_state, osc_server, device, window_size, output_name
+    initial_config, runtime_state, osc_server, device, window_size, output_name, use_cuda_graph
 ) -> None:
     """Start the OSC server and run the PySide6 GUI until the window closes.
 
@@ -79,6 +79,7 @@ def _run_gui(
         output_name,
         osc_server,
         initial_config=initial_config,
+        use_cuda_graph=use_cuda_graph,
     )
     window.show()
 
@@ -124,6 +125,20 @@ def _run_gui(
     help="Overlay engine status data on the output.",
 )
 @click.option(
+    "--fps-limit",
+    type=int,
+    default=30,
+    show_default=True,
+    help="Target frame rate cap; 0 disables the limiter (run as fast as possible).",
+)
+@click.option(
+    "--cuda-graph/--no-cuda-graph",
+    default=True,
+    show_default=True,
+    help="Replay the synthesis forward as a CUDA graph (CUDA only; large speedup). "
+    "Falls back to eager automatically off CUDA or if capture fails.",
+)
+@click.option(
     "--osc-port", type=int, default=7700, show_default=True, help="OSC listening port."
 )
 @click.option(
@@ -147,7 +162,7 @@ def _run_gui(
     show_default=True,
     help="Log file directory.",
 )
-def main(snapshots_dir, canonical_kimg, headless, debug, osc_port, output_name, device, window_size, log_dir):
+def main(snapshots_dir, canonical_kimg, headless, debug, fps_limit, cuda_graph, osc_port, output_name, device, window_size, log_dir):
     """Real-time interpolation engine blending StyleGAN training snapshots."""
     from balagan.logging_config import setup_logging
 
@@ -155,12 +170,13 @@ def main(snapshots_dir, canonical_kimg, headless, debug, osc_port, output_name, 
 
     resolved_device = _resolve_device(device)
     logger.info(
-        "Starting BalaGAN | mode=%s device=%s osc-port=%d output=%s window-size=%d",
+        "Starting BalaGAN | mode=%s device=%s osc-port=%d output=%s window-size=%d fps-limit=%d",
         "headless" if headless else "gui",
         resolved_device,
         osc_port,
         output_name,
         window_size,
+        fps_limit,
     )
 
     _ensure_stylegan3_on_path()
@@ -170,7 +186,7 @@ def main(snapshots_dir, canonical_kimg, headless, debug, osc_port, output_name, 
     from balagan.io.osc_server import OSCServer
 
     runtime_state = RuntimeState()
-    runtime_state.update(debug=debug)
+    runtime_state.update(debug=debug, fps_cap=fps_limit)
     osc_server = OSCServer(runtime_state, port=osc_port)
 
     if headless:
@@ -183,7 +199,11 @@ def main(snapshots_dir, canonical_kimg, headless, debug, osc_port, output_name, 
         from balagan.core.engine import build_engine
 
         engine = build_engine(
-            config, resolved_device, window_size=window_size, runtime_state=runtime_state
+            config,
+            resolved_device,
+            window_size=window_size,
+            runtime_state=runtime_state,
+            use_cuda_graph=cuda_graph,
         )
         _run_headless(engine, osc_server, output_name)
     else:
@@ -200,6 +220,7 @@ def main(snapshots_dir, canonical_kimg, headless, debug, osc_port, output_name, 
             resolved_device,
             window_size,
             output_name,
+            cuda_graph,
         )
 
 

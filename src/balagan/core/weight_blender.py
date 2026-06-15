@@ -64,7 +64,25 @@ class WeightBlender:
             return self._networks[kimg_a]
         if alpha == 1.0:
             return self._networks[kimg_b]
+        return self._blend_into_target(kimg_a, kimg_b, alpha)
 
+    def blend_into_target(
+        self, kimg_a: int, kimg_b: int, alpha: float
+    ) -> torch.nn.Module:
+        """Blend a pair into the persistent target network and return it.
+
+        Unlike ``__call__``, this never returns a cached network -- even at
+        ``alpha`` 0 or 1 it writes the result into the pre-allocated blend
+        target. The target's tensors therefore keep fixed addresses across
+        frames, which is what lets a captured CUDA graph read freshly-blended
+        weights on replay (``torch.lerp`` at alpha 0/1 reduces to copying the
+        dominant side, so no special-casing is needed).
+        """
+        return self._blend_into_target(kimg_a, kimg_b, alpha)
+
+    def _blend_into_target(
+        self, kimg_a: int, kimg_b: int, alpha: float
+    ) -> torch.nn.Module:
         sd_lower = self._state_dicts[kimg_a]
         sd_upper = self._state_dicts[kimg_b]
         assert self._blend_net is not None and self._blend_state is not None
