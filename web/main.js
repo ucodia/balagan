@@ -6,11 +6,11 @@
 // followed by an Annex B frame, so the decoder is configured WITHOUT a
 // `description`.
 //
-// Before connecting, set CERT_HASH to the SHA-256 printed by
-// `uv run python web/generate_cert.py`, and SERVER_URL to your host:port.
+// The cert hash and WebTransport port are fetched from the hosting engine at
+// /config.json, so nothing machine-specific is hardcoded here. The connection
+// uses the same hostname the page was served from (use 127.0.0.1 rather than
+// localhost, which browsers often resolve to IPv6 while the server binds IPv4).
 
-const CERT_HASH = "PASTE_SHA256_FROM_generate_cert.py";
-const SERVER_URL = "https://localhost:4433/balagan";
 const CODEC = "avc1.640028"; // H.264 High@4.0; adjust if your stream differs
 
 const HEADER_BYTES = 13;
@@ -33,6 +33,9 @@ function hexToBytes(hex) {
   return bytes;
 }
 
+const frameTimes = [];
+let lastStatusAt = 0;
+
 function makeDecoder() {
   return new VideoDecoder({
     output: (frame) => {
@@ -41,6 +44,14 @@ function makeDecoder() {
         canvas.height = frame.displayHeight;
       ctx.drawImage(frame, 0, 0);
       frame.close();
+      // Actual frames painted in the last second = rendered FPS.
+      const now = performance.now();
+      frameTimes.push(now);
+      while (frameTimes.length && frameTimes[0] <= now - 1000) frameTimes.shift();
+      if (now - lastStatusAt > 250) {
+        setStatus(`streaming — ${frameTimes.length} fps`);
+        lastStatusAt = now;
+      }
     },
     error: (e) => setStatus(`decoder error: ${e.message}`),
   });
@@ -65,8 +76,9 @@ async function readFullStream(readable) {
   return buffer;
 }
 
-// SeedX/seedY are unclamped on the engine; the XY pad maps to this range.
-const SEED_RANGE = 2.0;
+// Mirrors the Qt viewport's Autolume drag: latent delta = pixel delta * scale,
+// with scale = 4e-2 / font size (~13pt), and the seed is absolute on the engine.
+const SEED_DRAG_SCALE = 4e-2 / 13;
 
 async function setupControls(transport) {
   const stream = await transport.createBidirectionalStream();
@@ -88,36 +100,31 @@ async function setupControls(transport) {
   const anim = document.getElementById("anim");
   anim.addEventListener("change", () => send("/seedAnim", anim.checked ? 1 : 0));
 
-  const pad = document.getElementById("seedpad");
-  const padCtx = pad.getContext("2d");
-  const drawPad = (x, y) => {
-    pad.width = pad.clientWidth;
-    pad.height = pad.clientHeight;
-    padCtx.fillStyle = "#161616";
-    padCtx.fillRect(0, 0, pad.width, pad.height);
-    padCtx.fillStyle = "#5af";
-    padCtx.beginPath();
-    padCtx.arc(x * pad.width, y * pad.height, 7, 0, Math.PI * 2);
-    padCtx.fill();
-  };
-  drawPad(0.5, 0.5);
+  // Drag the video canvas to move the seed, like the Qt viewport.
+  let seedX = 0;
+  let seedY = 0;
   let dragging = false;
-  const onMove = (ev) => {
-    if (!dragging) return;
-    const rect = pad.getBoundingClientRect();
-    const nx = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
-    const ny = Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height));
-    drawPad(nx, ny);
-    send("/seedX", (nx * 2 - 1) * SEED_RANGE);
-    send("/seedY", (ny * 2 - 1) * SEED_RANGE);
-  };
-  pad.addEventListener("pointerdown", (ev) => {
+  let lastX = 0;
+  let lastY = 0;
+  canvas.style.cursor = "grab";
+  canvas.addEventListener("pointerdown", (ev) => {
     dragging = true;
-    pad.setPointerCapture(ev.pointerId);
-    onMove(ev);
+    lastX = ev.clientX;
+    lastY = ev.clientY;
+    canvas.setPointerCapture(ev.pointerId);
   });
-  pad.addEventListener("pointermove", onMove);
-  pad.addEventListener("pointerup", () => (dragging = false));
+  canvas.addEventListener("pointermove", (ev) => {
+    if (!dragging) return;
+    seedX += (ev.clientX - lastX) * SEED_DRAG_SCALE;
+    seedY += (ev.clientY - lastY) * SEED_DRAG_SCALE;
+    lastX = ev.clientX;
+    lastY = ev.clientY;
+    send("/seedX", seedX);
+    send("/seedY", seedY);
+  });
+  const endDrag = () => (dragging = false);
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
 }
 
 async function run() {
@@ -126,8 +133,23 @@ async function run() {
     return;
   }
 
-  const transport = new WebTransport(SERVER_URL, {
-    serverCertificateHashes: [{ algorithm: "sha-256", value: hexToBytes(CERT_HASH) }],
+  let config;
+  try {
+    config = await (await fetch("/config.json", { cache: "no-store" })).json();
+  } catch (e) {
+    setStatus(`could not load config: ${e.message}`);
+    return;
+  }
+  if (!config.certHash) {
+    setStatus("server certificate hash unavailable — generate a cert first.");
+    return;
+  }
+
+  const url = `https://${location.hostname}:${config.webtransportPort}${config.path}`;
+  const transport = new WebTransport(url, {
+    serverCertificateHashes: [
+      { algorithm: "sha-256", value: hexToBytes(config.certHash) },
+    ],
   });
 
   try {
@@ -141,7 +163,6 @@ async function run() {
 
   const decoder = makeDecoder();
   let configured = false;
-  let frames = 0;
 
   const reader = transport.incomingUnidirectionalStreams.getReader();
   for (;;) {
@@ -170,9 +191,6 @@ async function run() {
         data,
       })
     );
-
-    frames++;
-    if (frames % 30 === 0) setStatus(`streaming — ${frames} frames`);
   }
 }
 

@@ -9,6 +9,7 @@ import click
 logger = logging.getLogger(__name__)
 
 _STYLEGAN3_DIR = Path(__file__).resolve().parent.parent.parent / "stylegan3"
+_WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
 
 
 def _resolve_device(device: str) -> str:
@@ -170,6 +171,20 @@ def _run_gui(
     show_default=True,
     help="TLS private key for --output web (see web/generate_cert.py).",
 )
+@click.option(
+    "--web-ui-port",
+    type=int,
+    default=8000,
+    show_default=True,
+    help="HTTP port hosting the browser client for --output web.",
+)
+@click.option(
+    "--web-host",
+    default="127.0.0.1",
+    show_default=True,
+    help="Bind address for the browser client. Use 0.0.0.0 to reach it from other "
+    "machines on the LAN; non-loopback hosts are served over HTTPS.",
+)
 @click.option("--device", default="auto", show_default=True, help="Inference device.")
 @click.option(
     "--window-size",
@@ -185,7 +200,7 @@ def _run_gui(
     show_default=True,
     help="Log file directory.",
 )
-def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_kind, output_name, web_port, web_bitrate, web_cert, web_key, device, window_size, log_dir):
+def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_kind, output_name, web_port, web_bitrate, web_cert, web_key, web_ui_port, web_host, device, window_size, log_dir):
     """Real-time interpolation engine blending StyleGAN training snapshots."""
     from balagan.logging_config import setup_logging
 
@@ -219,6 +234,9 @@ def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_kind,
         web_bitrate=web_bitrate,
         web_cert=web_cert,
         web_key=web_key,
+        web_dir=_WEB_DIR,
+        web_ui_port=web_ui_port,
+        web_host=web_host,
     )
 
     if headless:

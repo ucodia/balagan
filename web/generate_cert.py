@@ -27,7 +27,7 @@ def main() -> None:
     print(f"Certificate: {args.cert}")
     print(f"Private key: {args.key}")
     print(f"SHA-256:     {digest}")
-    print("\nPaste the SHA-256 into web/main.js (CERT_HASH) before connecting.")
+    print("\nThe engine serves this hash to the browser automatically (--output web).")
 
 
 if __name__ == "__main__":

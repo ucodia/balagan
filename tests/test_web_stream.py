@@ -60,6 +60,65 @@ def test_send_drops_rather_than_blocks_with_no_subscriber(tmp_path):
         output.close()
 
 
+def test_hosts_browser_ui_over_http(tmp_path):
+    import urllib.request
+
+    web_dir = tmp_path / "web"
+    web_dir.mkdir()
+    (web_dir / "index.html").write_text("<h1>balagan</h1>")
+
+    output = _make_output(tmp_path, port=4459, web_dir=web_dir, ui_port=0)
+    try:
+        url = f"http://127.0.0.1:{output.ui_port}/index.html"
+        with urllib.request.urlopen(url, timeout=5) as response:
+            assert response.status == 200
+            assert b"balagan" in response.read()
+    finally:
+        output.close()
+
+
+def test_serves_client_config_with_cert_hash(tmp_path):
+    import json
+    import urllib.request
+
+    from balagan.io.dev_cert import cert_sha256
+
+    web_dir = tmp_path / "web"
+    web_dir.mkdir()
+
+    output = _make_output(tmp_path, port=4460, web_dir=web_dir, ui_port=0)
+    try:
+        url = f"http://127.0.0.1:{output.ui_port}/config.json"
+        with urllib.request.urlopen(url, timeout=5) as response:
+            config = json.loads(response.read())
+    finally:
+        output.close()
+
+    assert config["webtransportPort"] == 4460
+    assert config["path"] == "/balagan"
+    assert config["certHash"] == cert_sha256(tmp_path / "cert.pem")
+
+
+def test_non_loopback_host_serves_ui_over_https(tmp_path):
+    import urllib.request
+
+    web_dir = tmp_path / "web"
+    web_dir.mkdir()
+    (web_dir / "index.html").write_text("<h1>balagan</h1>")
+
+    output = _make_output(
+        tmp_path, port=4461, web_dir=web_dir, ui_port=0, ui_host="0.0.0.0"
+    )
+    try:
+        url = f"https://127.0.0.1:{output.ui_port}/index.html"
+        unverified = ssl._create_unverified_context()
+        with urllib.request.urlopen(url, timeout=5, context=unverified) as response:
+            assert response.status == 200
+            assert b"balagan" in response.read()
+    finally:
+        output.close()
+
+
 def _make_h3_client_class():
     from aioquic.asyncio.protocol import QuicConnectionProtocol
     from aioquic.h3.connection import H3Connection

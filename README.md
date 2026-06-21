@@ -52,22 +52,38 @@ WebTransport requires TLS. For local development, generate a short-lived
 self-signed certificate that the browser trusts via `serverCertificateHashes`:
 
 ```bash
-uv run python web/generate_cert.py   # writes web/certs/, prints a SHA-256 hash
+uv run python web/generate_cert.py   # writes web/certs/
 ```
 
-Paste the printed SHA-256 into `web/main.js` (`CERT_HASH`), then start the engine
-with web output:
+Then start the engine with web output:
 
 ```bash
 uv run balagan --headless --snapshots-dir <run> --output web
 ```
 
-Serve the `web/` directory over plain HTTP (no build step) and open it in
-Chrome/Edge:
+This also hosts the browser client itself over plain HTTP, so just open it in
+Chrome/Edge — no separate static server needed:
+
+```
+http://127.0.0.1:8000
+```
+
+The client fetches the certificate hash and WebTransport port from the engine at
+`/config.json`, so nothing machine-specific is hardcoded. Use `127.0.0.1` rather
+than `localhost`, which browsers often resolve to IPv6 first while the server
+binds IPv4. Change the host port with `--web-ui-port`.
+
+To reach the client from another machine on the LAN, bind it to all interfaces:
 
 ```bash
-python -m http.server -d web 8000   # then open http://localhost:8000
+uv run balagan --headless --snapshots-dir <run> --output web --web-host 0.0.0.0
 ```
+
+The startup log prints the LAN URL to open (e.g. `https://192.168.1.20:8000`).
+Non-loopback hosts are served over **HTTPS** — WebTransport requires a secure
+context, which a bare `http://<LAN-IP>` is not. Because the cert is self-signed
+and issued for `localhost`, the browser shows a one-time warning on the LAN
+machine; click through ("Proceed") and the stream connects.
 
 The certificate is valid for under 14 days (Chrome's limit for
 `serverCertificateHashes`); re-run the generator when it expires. Certificates

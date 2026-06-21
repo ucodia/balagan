@@ -19,11 +19,13 @@ are kept lazy so importing the module stays cheap on machines without aioquic.
 """
 
 import asyncio
+import json
 import logging
 import struct
 import threading
 import time
 from collections import deque
+from http.server import SimpleHTTPRequestHandler
 from pathlib import Path
 
 import numpy as np
@@ -36,12 +38,58 @@ _KEYFRAME_FLAG = 0x01
 _DEFAULT_QUEUE_SIZE = 8
 
 
+def _display_host(host: str) -> str:
+    """Resolve a wildcard bind address to this machine's LAN IP for logging."""
+    if host not in ("0.0.0.0", "::"):
+        return host
+    import socket
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("8.8.8.8", 80))  # no packets sent; just selects the route
+        return probe.getsockname()[0]
+    except OSError:
+        return host
+    finally:
+        probe.close()
+
+
+class _QuietHandler(SimpleHTTPRequestHandler):
+    """Static file handler for the browser client.
+
+    Serves a small ``/config.json`` carrying the cert hash and WebTransport port
+    (read from ``server.balagan_config``) so the client never hardcodes them.
+    Logs to the module logger and disables caching so edits to the dev client are
+    always picked up on reload.
+    """
+
+    def do_GET(self) -> None:
+        if self.path == "/config.json":
+            body = json.dumps(getattr(self.server, "balagan_config", {})).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
+
+    def log_message(self, format, *args) -> None:
+        logger.debug("web-ui %s - %s", self.address_string(), format % args)
+
+    def end_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
+
 class WebStreamOutput:
     """Streams encoded frames to browsers over WebTransport.
 
     Implements the same ``send``/``close`` contract as the Syphon/Spout sinks, so
-    the render loop treats it identically. ``runtime_state`` is accepted now and
-    used by the upstream control channel in a later phase.
+    the render loop treats it identically. ``runtime_state`` receives upstream
+    control messages from connected browsers. When ``web_dir`` is given, a plain
+    HTTP server also hosts the browser client on ``127.0.0.1`` (a secure context,
+    so WebTransport works) — no separate static server needed.
     """
 
     def __init__(
@@ -59,6 +107,9 @@ class WebStreamOutput:
         bitrate: int = 25_000_000,
         codec: str | None = None,
         queue_size: int = _DEFAULT_QUEUE_SIZE,
+        web_dir: Path | None = None,
+        ui_port: int = 8000,
+        ui_host: str = "127.0.0.1",
     ) -> None:
         from balagan.io.video_encoder import EncoderConfig, default_config
 
@@ -69,6 +120,7 @@ class WebStreamOutput:
         self._key = Path(key)
         self._runtime_state = runtime_state
         self._queue_size = queue_size
+        self._ui_httpd = None
 
         if codec is None:
             self._encoder_config = default_config(fps=fps, bitrate=bitrate)
@@ -106,6 +158,15 @@ class WebStreamOutput:
             self._port,
             self._encoder_config.codec,
         )
+        if web_dir is not None:
+            self._start_ui_server(Path(web_dir), ui_host, ui_port)
+
+    @property
+    def ui_port(self) -> int | None:
+        """The bound HTTP port of the UI server, or None if it is not running."""
+        if self._ui_httpd is None:
+            return None
+        return self._ui_httpd.server_address[1]
 
     # -- render-thread API ---------------------------------------------------
 
@@ -126,15 +187,76 @@ class WebStreamOutput:
                 return
 
     def close(self) -> None:
-        """Flush the encoder, stop the server, and join the loop thread."""
+        """Flush the encoder, stop the servers, and join the loop thread."""
         try:
             self._encoder.close()
         except Exception:  # noqa: BLE001 — best-effort flush during teardown
             logger.exception("Encoder flush failed during close")
+        if self._ui_httpd is not None:
+            self._ui_httpd.shutdown()
+            self._ui_httpd.server_close()
         loop = self._loop
         if loop is not None and loop.is_running():
             loop.call_soon_threadsafe(self._shutdown)
         self._thread.join(timeout=5)
+
+    def _start_ui_server(self, web_dir: Path, ui_host: str, ui_port: int) -> None:
+        """Host the browser client on a daemon thread.
+
+        Loopback hosts are served over plain HTTP (a secure context, no cert
+        warning). Any other host is served over HTTPS using the WebTransport
+        cert, because a LAN page must be a secure context for WebTransport to be
+        available. Bind failures are logged and skipped: the stream is the point,
+        the static host is a convenience, so a busy port must not take the engine
+        down.
+        """
+        import functools
+        from http.server import ThreadingHTTPServer
+
+        if not web_dir.is_dir():
+            logger.warning("Web UI directory not found: %s", web_dir)
+            return
+        handler = functools.partial(_QuietHandler, directory=str(web_dir))
+        try:
+            self._ui_httpd = ThreadingHTTPServer((ui_host, ui_port), handler)
+        except OSError as exc:
+            logger.warning("Could not start web UI server on port %d: %s", ui_port, exc)
+            return
+
+        secure = ui_host not in ("127.0.0.1", "localhost", "::1")
+        if secure:
+            self._wrap_ui_tls()
+        self._ui_httpd.balagan_config = self._client_config()
+        threading.Thread(
+            target=self._ui_httpd.serve_forever, name="web-ui", daemon=True
+        ).start()
+        scheme = "https" if secure else "http"
+        host = _display_host(ui_host) if secure else "127.0.0.1"
+        logger.info("Web UI available at %s://%s:%d", scheme, host, self.ui_port)
+
+    def _wrap_ui_tls(self) -> None:
+        import ssl
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=str(self._cert), keyfile=str(self._key))
+        self._ui_httpd.socket = context.wrap_socket(
+            self._ui_httpd.socket, server_side=True
+        )
+
+    def _client_config(self) -> dict:
+        """Runtime config the browser client fetches: cert hash and QUIC port."""
+        from balagan.io.dev_cert import cert_sha256
+
+        try:
+            cert_hash = cert_sha256(self._cert)
+        except OSError as exc:
+            logger.warning("Could not read certificate %s: %s", self._cert, exc)
+            cert_hash = None
+        return {
+            "certHash": cert_hash,
+            "webtransportPort": self._port,
+            "path": "/balagan",
+        }
 
     # -- loop-thread internals ----------------------------------------------
 

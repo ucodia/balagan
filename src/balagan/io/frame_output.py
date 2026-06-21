@@ -30,6 +30,9 @@ class OutputSettings:
     web_codec: str | None = None
     web_cert: Path | None = None
     web_key: Path | None = None
+    web_dir: Path | None = None
+    web_ui_port: int = 8000
+    web_host: str = "127.0.0.1"
 
 
 def build_output(
@@ -58,6 +61,9 @@ def build_output(
             fps=fps,
             bitrate=settings.web_bitrate,
             codec=settings.web_codec,
+            web_dir=settings.web_dir,
+            ui_port=settings.web_ui_port,
+            ui_host=settings.web_host,
         )
     return FrameOutput(settings.name, width, height)
 

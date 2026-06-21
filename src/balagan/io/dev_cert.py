@@ -57,3 +57,17 @@ def generate_self_signed_cert(cert_path: Path, key_path: Path) -> str:
 
     der = certificate.public_bytes(serialization.Encoding.DER)
     return hashlib.sha256(der).hexdigest()
+
+
+def cert_sha256(cert_path: Path) -> str:
+    """Return the hex SHA-256 of an existing certificate's DER encoding.
+
+    This is the value the browser needs in ``serverCertificateHashes``; the web
+    UI server serves it to the client so the hash is never hardcoded.
+    """
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    certificate = x509.load_pem_x509_certificate(Path(cert_path).read_bytes())
+    der = certificate.public_bytes(serialization.Encoding.DER)
+    return hashlib.sha256(der).hexdigest()
