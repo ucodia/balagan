@@ -31,16 +31,18 @@ def _ensure_stylegan3_on_path() -> None:
         sys.path.insert(0, path)
 
 
-def _run_headless(engine, osc_server, output_name) -> None:
+def _run_headless(engine, osc_server, output_settings, runtime_state) -> None:
     """Start the OSC server and run the render loop, publishing each frame."""
-    from balagan.io.frame_output import FrameOutput
+    from balagan.io.frame_output import build_output
 
     osc_server.start()
     engine.prime()
     engine.start()
     first_frame = engine.render_frame()
     height, width = first_frame.shape[:2]
-    output = FrameOutput(output_name, width, height)
+    output = build_output(
+        output_settings, width, height, runtime_state=runtime_state
+    )
     output.send(first_frame)
     logger.info("Headless rendering started; press Ctrl+C to stop")
     try:
@@ -55,7 +57,7 @@ def _run_headless(engine, osc_server, output_name) -> None:
 
 
 def _run_gui(
-    initial_config, runtime_state, osc_server, device, window_size, output_name
+    initial_config, runtime_state, osc_server, device, window_size, output_settings
 ) -> None:
     """Start the OSC server and run the PySide6 GUI until the window closes.
 
@@ -76,7 +78,7 @@ def _run_gui(
         runtime_state,
         device,
         window_size,
-        output_name,
+        output_settings,
         osc_server,
         initial_config=initial_config,
     )
@@ -127,10 +129,46 @@ def _run_gui(
     "--osc-port", type=int, default=7700, show_default=True, help="OSC listening port."
 )
 @click.option(
+    "--output",
+    "output_kind",
+    type=click.Choice(["auto", "spout-syphon", "web"]),
+    default="auto",
+    show_default=True,
+    help="Frame output: native Spout/Syphon or WebTransport streaming.",
+)
+@click.option(
     "--output-name",
     default="BalaGAN",
     show_default=True,
-    help="Spout/Syphon output name.",
+    help="Spout/Syphon output name (also the WebTransport server name).",
+)
+@click.option(
+    "--web-port",
+    type=int,
+    default=4433,
+    show_default=True,
+    help="WebTransport (HTTP/3) listening port for --output web.",
+)
+@click.option(
+    "--web-bitrate",
+    type=int,
+    default=25_000_000,
+    show_default=True,
+    help="Target encoder bitrate in bits/sec for --output web.",
+)
+@click.option(
+    "--web-cert",
+    type=click.Path(path_type=Path),
+    default=Path("web/certs/cert.pem"),
+    show_default=True,
+    help="TLS certificate for --output web (see web/generate_cert.py).",
+)
+@click.option(
+    "--web-key",
+    type=click.Path(path_type=Path),
+    default=Path("web/certs/key.pem"),
+    show_default=True,
+    help="TLS private key for --output web (see web/generate_cert.py).",
 )
 @click.option("--device", default="auto", show_default=True, help="Inference device.")
 @click.option(
@@ -147,7 +185,7 @@ def _run_gui(
     show_default=True,
     help="Log file directory.",
 )
-def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_name, device, window_size, log_dir):
+def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_kind, output_name, web_port, web_bitrate, web_cert, web_key, device, window_size, log_dir):
     """Real-time interpolation engine blending StyleGAN training snapshots."""
     from balagan.logging_config import setup_logging
 
@@ -155,10 +193,11 @@ def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_name,
 
     resolved_device = _resolve_device(device)
     logger.info(
-        "Starting BalaGAN | mode=%s device=%s osc-port=%d output=%s window-size=%d",
+        "Starting BalaGAN | mode=%s device=%s osc-port=%d output=%s name=%s window-size=%d",
         "headless" if headless else "gui",
         resolved_device,
         osc_port,
+        output_kind,
         output_name,
         window_size,
     )
@@ -167,11 +206,20 @@ def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_name,
 
     from balagan.config import ConfigError, load_run
     from balagan.core.runtime_state import RuntimeState
+    from balagan.io.frame_output import OutputSettings
     from balagan.io.osc_server import OSCServer
 
     runtime_state = RuntimeState()
     runtime_state.update(debug=debug)
     osc_server = OSCServer(runtime_state, port=osc_port)
+    output_settings = OutputSettings(
+        kind=output_kind,
+        name=output_name,
+        web_port=web_port,
+        web_bitrate=web_bitrate,
+        web_cert=web_cert,
+        web_key=web_key,
+    )
 
     if headless:
         if snapshots_dir is None:
@@ -185,7 +233,7 @@ def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_name,
         engine = build_engine(
             config, resolved_device, window_size=window_size, runtime_state=runtime_state
         )
-        _run_headless(engine, osc_server, output_name)
+        _run_headless(engine, osc_server, output_settings, runtime_state)
     else:
         initial_config = None
         if snapshots_dir is not None:
@@ -199,7 +247,7 @@ def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_name,
             osc_server,
             resolved_device,
             window_size,
-            output_name,
+            output_settings,
         )
 
 

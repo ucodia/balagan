@@ -29,7 +29,7 @@ class MainWindow(QMainWindow):
         runtime_state,
         device,
         window_size: int,
-        output_name: str,
+        output_settings,
         osc_server,
         initial_config=None,
     ) -> None:
@@ -37,7 +37,7 @@ class MainWindow(QMainWindow):
         self._runtime_state = runtime_state
         self._device = device
         self._window_size = window_size
-        self._output_name = output_name
+        self._output_settings = output_settings
         self._osc_server = osc_server
         self._config = None
         self._render_worker: RenderWorker | None = None
@@ -138,7 +138,7 @@ class MainWindow(QMainWindow):
             self._device,
             self._window_size,
             self._runtime_state,
-            self._output_name,
+            self._output_settings,
         )
         worker.frame_ready.connect(self._viewport.update_frame)
         worker.status_changed.connect(self._control_panel.update_status)

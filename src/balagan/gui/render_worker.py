@@ -18,8 +18,9 @@ class RenderWorker(QThread):
     """Builds the engine for a config, primes it, and runs its loop on its own
     thread, emitting each rendered frame as a QImage plus the engine's status
     line. The heavy build and prime happen here so the Qt main thread never
-    blocks. While the runtime state's Spout/Syphon checkbox is enabled, frames
-    are also published to a lazily-created output.
+    blocks. The output sink is lazily created on first use: a web sink streams
+    for the worker's lifetime, while the native Spout/Syphon sink is gated by the
+    runtime state's checkbox.
     """
 
     frame_ready = Signal(QImage)
@@ -30,14 +31,14 @@ class RenderWorker(QThread):
     recording_failed = Signal(str)
 
     def __init__(
-        self, config, device, window_size: int, runtime_state, output_name: str
+        self, config, device, window_size: int, runtime_state, output_settings
     ) -> None:
         super().__init__()
         self._config = config
         self._device = device
         self._window_size = window_size
         self._runtime_state = runtime_state
-        self._output_name = output_name
+        self._output_settings = output_settings
         self._engine = None
         self._output = None
         self._recorder = None
@@ -84,12 +85,20 @@ class RenderWorker(QThread):
         self._engine.stop()
 
     def _publish(self, frame, width: int, height: int) -> None:
-        if not self._runtime_state.snapshot().spout_syphon_enabled:
-            return
+        # The web sink streams whenever selected; the native sink is gated by the
+        # GUI's Spout/Syphon checkbox.
+        if self._output_settings.kind != "web":
+            if not self._runtime_state.snapshot().spout_syphon_enabled:
+                return
         if self._output is None:
-            from balagan.io.frame_output import FrameOutput
+            from balagan.io.frame_output import build_output
 
-            self._output = FrameOutput(self._output_name, width, height)
+            self._output = build_output(
+                self._output_settings,
+                width,
+                height,
+                runtime_state=self._runtime_state,
+            )
         self._output.send(frame)
 
     def _record(self, frame, width: int, height: int) -> None:

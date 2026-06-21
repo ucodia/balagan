@@ -40,6 +40,39 @@ Pass `--headless` to run without the GUI. List all options:
 uv run balagan --help
 ```
 
+## Web streaming output (experimental)
+
+`--output web` streams rendered frames to a browser over WebTransport
+(HTTP/3 / QUIC), decoded with WebCodecs — no native client, no viewer-side GPU.
+Frames are hardware-encoded (VideoToolbox on macOS, NVENC on Windows, libx264
+fallback elsewhere). The default Syphon/Spout output is unchanged and remains the
+default (`--output auto`).
+
+WebTransport requires TLS. For local development, generate a short-lived
+self-signed certificate that the browser trusts via `serverCertificateHashes`:
+
+```bash
+uv run python web/generate_cert.py   # writes web/certs/, prints a SHA-256 hash
+```
+
+Paste the printed SHA-256 into `web/main.js` (`CERT_HASH`), then start the engine
+with web output:
+
+```bash
+uv run balagan --headless --snapshots-dir <run> --output web
+```
+
+Serve the `web/` directory over plain HTTP (no build step) and open it in
+Chrome/Edge:
+
+```bash
+python -m http.server -d web 8000   # then open http://localhost:8000
+```
+
+The certificate is valid for under 14 days (Chrome's limit for
+`serverCertificateHashes`); re-run the generator when it expires. Certificates
+live under `web/certs/` and are gitignored — never commit them.
+
 ## Development
 
 Run the test suite:
