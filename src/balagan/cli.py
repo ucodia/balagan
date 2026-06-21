@@ -108,10 +108,10 @@ def _run_gui(
     "in the window); required with --headless.",
 )
 @click.option(
-    "--canonical-kimg",
+    "--canonical-index",
     type=int,
     default=None,
-    help="Override the canonical mapping snapshot's kimg (default: middle of the sorted snapshots).",
+    help="Override the canonical mapping snapshot's 0-based index (default: middle of the sorted snapshots).",
 )
 @click.option(
     "--headless",
@@ -147,7 +147,7 @@ def _run_gui(
     show_default=True,
     help="Log file directory.",
 )
-def main(snapshots_dir, canonical_kimg, headless, debug, osc_port, output_name, device, window_size, log_dir):
+def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_name, device, window_size, log_dir):
     """Real-time interpolation engine blending StyleGAN training snapshots."""
     from balagan.logging_config import setup_logging
 
@@ -177,7 +177,7 @@ def main(snapshots_dir, canonical_kimg, headless, debug, osc_port, output_name, 
         if snapshots_dir is None:
             raise click.ClickException("--snapshots-dir is required in headless mode")
         try:
-            config = load_run(snapshots_dir, canonical_kimg)
+            config = load_run(snapshots_dir, canonical_index)
         except ConfigError as exc:
             raise click.ClickException(str(exc)) from exc
         from balagan.core.engine import build_engine
@@ -190,7 +190,7 @@ def main(snapshots_dir, canonical_kimg, headless, debug, osc_port, output_name, 
         initial_config = None
         if snapshots_dir is not None:
             try:
-                initial_config = load_run(snapshots_dir, canonical_kimg)
+                initial_config = load_run(snapshots_dir, canonical_index)
             except ConfigError as exc:
                 raise click.ClickException(str(exc)) from exc
         _run_gui(

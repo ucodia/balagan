@@ -262,14 +262,14 @@ class ControlPanel(QWidget):
 
     def populate_canonical(self, config) -> None:
         """Fill the folder field and canonical dropdown from a config, selecting
-        its canonical kimg. Signals are blocked so this never re-triggers a
+        its canonical index. Signals are blocked so this never re-triggers a
         rebuild."""
         self._folder.setText(str(config.snapshots_dir))
         self._canonical.blockSignals(True)
         self._canonical.clear()
         for snapshot in config.snapshots:
-            self._canonical.addItem(f"{snapshot.kimg} kimg", snapshot.kimg)
-        index = self._canonical.findData(config.canonical_mapping_kimg)
+            self._canonical.addItem(snapshot.pkl_path.stem, snapshot.index)
+        index = self._canonical.findData(config.canonical_index)
         if index >= 0:
             self._canonical.setCurrentIndex(index)
         self._canonical.blockSignals(False)
@@ -287,9 +287,9 @@ class ControlPanel(QWidget):
             self.folder_selected.emit(path)
 
     def _on_canonical_activated(self, _index: int) -> None:
-        kimg = self._canonical.currentData()
-        if kimg is not None:
-            self.canonical_changed.emit(kimg)
+        index = self._canonical.currentData()
+        if index is not None:
+            self.canonical_changed.emit(index)
 
     def _on_position(self, value: int) -> None:
         position = value / _POSITION_STEPS

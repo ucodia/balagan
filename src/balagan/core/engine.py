@@ -58,12 +58,14 @@ class Engine:
         weight_blender: WeightBlender,
         snapshot_manager: SnapshotManager,
         runtime_state: RuntimeState,
+        snapshot_names: tuple[str, ...] = (),
     ) -> None:
         self._interpolator = interpolator
         self._latent_navigator = latent_navigator
         self._weight_blender = weight_blender
         self._snapshot_manager = snapshot_manager
         self._runtime_state = runtime_state
+        self._snapshot_names = snapshot_names
 
         self._blender_cached: set[int] = set()
         self._last_frame_start: float | None = None
@@ -84,8 +86,8 @@ class Engine:
     def prime(self) -> None:
         """Synchronously load the initial window for the current position."""
         position = self._runtime_state.snapshot().position
-        kimg_a, kimg_b, _ = self._interpolator(position)
-        self._snapshot_manager.prime(kimg_a, kimg_b)
+        index_a, index_b, _ = self._interpolator(position)
+        self._snapshot_manager.prime(index_a, index_b)
 
     def start(self) -> None:
         """Start the snapshot manager's background loader thread."""
@@ -113,8 +115,8 @@ class Engine:
             latent_y = state.latent_y + state.anim_speed_y * delta
             self._runtime_state.update(latent_x=latent_x, latent_y=latent_y)
 
-        kimg_a, kimg_b, alpha = self._interpolator(state.position)
-        self._snapshot_manager.set_active_pair(kimg_a, kimg_b)
+        index_a, index_b, alpha = self._interpolator(state.position)
+        self._snapshot_manager.set_active_pair(index_a, index_b)
 
         # One consistent view of the loaded snapshots drives the whole frame:
         # the blender cache, the pair choice, and the blend. Re-reading the
@@ -123,13 +125,13 @@ class Engine:
         loaded = self._snapshot_manager.loaded_networks()
         self._sync_blender_cache(loaded)
 
-        render_a, render_b = kimg_a, kimg_b
-        if kimg_a not in loaded or kimg_b not in loaded:
-            render_a, render_b = self._nearest_loaded_pair(loaded, kimg_a, kimg_b)
+        render_a, render_b = index_a, index_b
+        if index_a not in loaded or index_b not in loaded:
+            render_a, render_b = self._nearest_loaded_pair(loaded, index_a, index_b)
             logger.warning(
                 "Snapshot pair (%d, %d) not ready; rendering nearest loaded (%d, %d)",
-                kimg_a,
-                kimg_b,
+                index_a,
+                index_b,
                 render_a,
                 render_b,
             )
@@ -140,18 +142,18 @@ class Engine:
             image = synthesis(ws=ws.unsqueeze(0), noise_mode="const")[0]
             frame = _to_uint8_hwc(image)
 
-        self._report(state.position, kimg_a, kimg_b, alpha)
+        self._report(state.position, index_a, index_b, alpha)
         if state.debug:
             frame = _draw_debug_overlay(frame, self._last_status)
         self._limit_framerate(state.fps_cap, frame_start)
         return frame
 
     def _nearest_loaded_pair(
-        self, loaded: dict[int, torch.nn.Module], kimg_a: int, kimg_b: int
+        self, loaded: dict[int, torch.nn.Module], index_a: int, index_b: int
     ) -> tuple[int, int]:
-        kimgs = loaded.keys()
-        nearest_a = min(kimgs, key=lambda kimg: abs(kimg - kimg_a))
-        nearest_b = min(kimgs, key=lambda kimg: abs(kimg - kimg_b))
+        indices = loaded.keys()
+        nearest_a = min(indices, key=lambda i: abs(i - index_a))
+        nearest_b = min(indices, key=lambda i: abs(i - index_b))
         return nearest_a, nearest_b
 
     def _sync_blender_cache(self, loaded: dict[int, torch.nn.Module]) -> None:
@@ -161,13 +163,13 @@ class Engine:
         guarantees every snapshot the frame goes on to blend is resident in
         the blender.
         """
-        for kimg, network in loaded.items():
-            if kimg not in self._blender_cached:
-                self._weight_blender.cache_snapshot(kimg, network)
-                self._blender_cached.add(kimg)
-        for kimg in self._blender_cached - loaded.keys():
-            self._weight_blender.evict_snapshot(kimg)
-            self._blender_cached.discard(kimg)
+        for index, network in loaded.items():
+            if index not in self._blender_cached:
+                self._weight_blender.cache_snapshot(index, network)
+                self._blender_cached.add(index)
+        for index in self._blender_cached - loaded.keys():
+            self._weight_blender.evict_snapshot(index)
+            self._blender_cached.discard(index)
 
     def _limit_framerate(self, fps_cap: int, frame_start: float) -> None:
         # Schedule against an absolute deadline rather than each frame's own
@@ -192,15 +194,18 @@ class Engine:
             # than fast-forwarding through frames with zero-length sleeps.
             self._next_deadline = now + period
 
-    def _report(self, position: float, kimg_a: int, kimg_b: int, alpha: float) -> None:
+    def _report(self, position: float, index_a: int, index_b: int, alpha: float) -> None:
         self._frames_since_log += 1
         elapsed = time.perf_counter() - self._last_log_time
         if elapsed < 1.0:
             return
         fps = f"{self._frames_since_log / elapsed:.1f} fps"
-        blend = f"{kimg_a} → {kimg_b} ({round(alpha * 100)}%)"
-        self._last_status = f"{fps} | {blend}"
-        logger.info("%s | t=%.3f | %s", fps, position, blend)
+        name_a = self._snapshot_names[index_a] if self._snapshot_names else str(index_a)
+        name_b = self._snapshot_names[index_b] if self._snapshot_names else str(index_b)
+        pct_a = round((1.0 - alpha) * 100)
+        pct_b = round(alpha * 100)
+        self._last_status = f"{fps} | {name_a} ({pct_a}%) | {name_b} ({pct_b}%)"
+        logger.info("%s | t=%.3f | %s (%d%%) -> %s (%d%%)", fps, position, name_a, pct_a, name_b, pct_b)
         self._frames_since_log = 0
         self._last_log_time = time.perf_counter()
 
@@ -222,8 +227,7 @@ def build_engine(
     GUI control values and widget bindings survive a swap; when omitted a fresh
     one is created.
     """
-    canonical_kimg = config.canonical_mapping_kimg
-    canonical_pkl = config.snapshots_dir / f"network-snapshot-{canonical_kimg:06d}.pkl"
+    canonical_pkl = config.snapshots[config.canonical_index].pkl_path
     canonical_mapping = load_canonical_mapping(canonical_pkl, device)
 
     def snapshot_loader(pkl_path) -> torch.nn.Module:
@@ -234,9 +238,10 @@ def build_engine(
         latent_navigator=LatentNavigator(canonical_mapping, z_dim=canonical_mapping.z_dim),
         weight_blender=WeightBlender(),
         snapshot_manager=SnapshotManager(
-            config.snapshots, canonical_kimg, snapshot_loader, window_size
+            config.snapshots, config.canonical_index, snapshot_loader, window_size
         ),
         runtime_state=runtime_state if runtime_state is not None else RuntimeState(),
+        snapshot_names=tuple(s.pkl_path.name for s in config.snapshots),
     )
     logger.info(
         "Engine built: %d snapshots, device %s, window size %d",

@@ -86,11 +86,11 @@ class MainWindow(QMainWindow):
             return
         self._apply_config(config)
 
-    def _on_canonical_changed(self, kimg: int) -> None:
-        if self._config is None or kimg == self._config.canonical_mapping_kimg:
+    def _on_canonical_changed(self, index: int) -> None:
+        if self._config is None or index == self._config.canonical_index:
             return
         try:
-            config = load_run(self._config.snapshots_dir, kimg)
+            config = load_run(self._config.snapshots_dir, index)
         except ConfigError as exc:
             QMessageBox.warning(self, "Invalid canonical snapshot", str(exc))
             return

@@ -1,13 +1,10 @@
 """Run-folder scan: index snapshot .pkl files, default the canonical mapping snapshot."""
 
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-_SNAPSHOT_RE = re.compile(r"network-snapshot-(\d+)\.pkl")
 
 
 class ConfigError(Exception):
@@ -16,33 +13,32 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class SnapshotInfo:
-    """One indexed training snapshot: its kimg and .pkl location."""
+    """One indexed snapshot: its sort-order index and .pkl location."""
 
-    kimg: int
+    index: int
     pkl_path: Path
 
 
 @dataclass(frozen=True)
 class EngineConfig:
-    """A run folder with its indexed snapshots and the canonical mapping kimg."""
+    """A run folder with its indexed snapshots and the canonical mapping index."""
 
     snapshots_dir: Path
-    canonical_mapping_kimg: int
+    canonical_index: int
     snapshots: tuple[SnapshotInfo, ...]
 
 
 def load_run(
-    snapshots_dir: Path | str, canonical_kimg: int | None = None
+    snapshots_dir: Path | str, canonical_index: int | None = None
 ) -> EngineConfig:
-    """Scan a run folder for network-snapshot-*.pkl files.
+    """Scan a run folder for .pkl files.
 
-    Snapshots are sorted by kimg. The canonical mapping snapshot defaults to
+    Snapshots are sorted by filename. The canonical mapping snapshot defaults to
     the middle of the sorted list (``snapshots[len(snapshots) // 2]``); pass
-    ``canonical_kimg`` to override. The override must correspond to an
-    indexed snapshot.
+    ``canonical_index`` to override with a 0-based index into the sorted list.
 
     Raises ``ConfigError`` if the directory is missing, contains fewer than
-    two snapshots, or the override doesn't match any snapshot file.
+    two snapshots, or the override index is out of range.
     """
     snapshots_dir = Path(snapshots_dir)
     if not snapshots_dir.is_dir():
@@ -55,31 +51,28 @@ def load_run(
             f"at least 2 are required"
         )
 
-    if canonical_kimg is None:
-        canonical_kimg = snapshots[len(snapshots) // 2].kimg
-    elif not any(s.kimg == canonical_kimg for s in snapshots):
+    if canonical_index is None:
+        canonical_index = len(snapshots) // 2
+    elif not (0 <= canonical_index < len(snapshots)):
         raise ConfigError(
-            f"canonical_kimg {canonical_kimg} has no matching snapshot file "
-            f"in {snapshots_dir}"
+            f"canonical_index {canonical_index} is out of range for "
+            f"{len(snapshots)} snapshots in {snapshots_dir}"
         )
 
     logger.info(
-        "Loaded run %s: %d snapshots, canonical kimg %d",
+        "Loaded run %s: %d snapshots, canonical index %d (%s)",
         snapshots_dir,
         len(snapshots),
-        canonical_kimg,
+        canonical_index,
+        snapshots[canonical_index].pkl_path.name,
     )
     return EngineConfig(
         snapshots_dir=snapshots_dir,
-        canonical_mapping_kimg=canonical_kimg,
+        canonical_index=canonical_index,
         snapshots=snapshots,
     )
 
 
 def _build_snapshot_index(snapshots_dir: Path) -> tuple[SnapshotInfo, ...]:
-    snapshots: list[SnapshotInfo] = []
-    for path in snapshots_dir.glob("network-snapshot-*.pkl"):
-        match = _SNAPSHOT_RE.fullmatch(path.name)
-        if match:
-            snapshots.append(SnapshotInfo(kimg=int(match.group(1)), pkl_path=path))
-    return tuple(sorted(snapshots, key=lambda s: s.kimg))
+    paths = sorted(snapshots_dir.glob("*.pkl"), key=lambda p: p.name)
+    return tuple(SnapshotInfo(index=i, pkl_path=path) for i, path in enumerate(paths))

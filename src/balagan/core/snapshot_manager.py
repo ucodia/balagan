@@ -50,22 +50,21 @@ def _compute_window(
 class SnapshotManager:
     """Keeps a rolling window of synthesis networks loaded on the inference device.
 
-    The window always includes the canonical snapshot (if its kimg is indexed)
-    and the active pair, padded around the pair. Loads run on a background
-    thread so the render thread is never blocked; ``prime`` does a synchronous
-    initial load to avoid a black-frame startup.
+    The window always includes the canonical snapshot and the active pair,
+    padded around the pair. Loads run on a background thread so the render
+    thread is never blocked; ``prime`` does a synchronous initial load to
+    avoid a black-frame startup.
     """
 
     def __init__(
         self,
         snapshots: Sequence[SnapshotInfo],
-        canonical_kimg: int,
+        canonical_index: int,
         loader: Callable[[Path], torch.nn.Module],
         window_size: int = 32,
     ) -> None:
-        self._snapshots = sorted(snapshots, key=lambda snap: snap.kimg)
-        self._index_of = {snap.kimg: i for i, snap in enumerate(self._snapshots)}
-        self._canonical_kimg = canonical_kimg
+        self._snapshots = sorted(snapshots, key=lambda snap: snap.index)
+        self._canonical_index = canonical_index
         self._loader = loader
         # A non-positive window size means "no limit": keep every snapshot resident.
         self._window_size = window_size if window_size > 0 else len(self._snapshots)
@@ -77,11 +76,17 @@ class SnapshotManager:
         self._running = False
         self._thread: threading.Thread | None = None
 
-    def prime(self, kimg_a: int, kimg_b: int) -> None:
+    def prime(self, index_a: int, index_b: int) -> None:
         """Synchronously load the window for a pair; blocks until the window is
         resident. Used at startup to avoid a black first frame."""
         with self._lock:
-            self._desired = self._window_kimgs(kimg_a, kimg_b)
+            self._desired = _compute_window(
+                len(self._snapshots),
+                self._canonical_index,
+                index_a,
+                index_b,
+                self._window_size,
+            )
         while self._reconcile_step():
             pass
         logger.info("Snapshot manager primed window: %s", sorted(self._loaded))
@@ -104,40 +109,46 @@ class SnapshotManager:
             self._thread.join()
             self._thread = None
 
-    def set_active_pair(self, kimg_a: int, kimg_b: int) -> None:
+    def set_active_pair(self, index_a: int, index_b: int) -> None:
         """Recompute the desired window and wake the loader thread. Non-blocking."""
-        desired = self._window_kimgs(kimg_a, kimg_b)
+        desired = _compute_window(
+            len(self._snapshots),
+            self._canonical_index,
+            index_a,
+            index_b,
+            self._window_size,
+        )
         with self._lock:
             if desired == self._desired:
                 return
             self._desired = desired
         self._wake.set()
 
-    def get_synthesis(self, kimg: int) -> torch.nn.Module | None:
-        """Return the loaded synthesis network for a kimg, or None if not loaded."""
+    def get_synthesis(self, index: int) -> torch.nn.Module | None:
+        """Return the loaded synthesis network for an index, or None if not loaded."""
         with self._lock:
-            return self._loaded.get(kimg)
+            return self._loaded.get(index)
 
     def loaded_networks(self) -> dict[int, torch.nn.Module]:
-        """An atomic snapshot of the resident networks, keyed by kimg.
+        """An atomic snapshot of the resident networks, keyed by index.
 
         The returned dict is a private copy taken under the lock: it stays
         stable even if the loader thread evicts snapshots immediately
         afterward, and its references keep those networks alive for as long as
         the caller holds it. A render frame must take this single view rather
-        than combining ``loaded_kimgs`` and ``get_synthesis``, which can
+        than combining ``loaded_indices`` and ``get_synthesis``, which can
         disagree once the loader thread evicts between the two calls.
         """
         with self._lock:
             return dict(self._loaded)
 
-    def is_pair_ready(self, kimg_a: int, kimg_b: int) -> bool:
+    def is_pair_ready(self, index_a: int, index_b: int) -> bool:
         """Whether both snapshots of a pair are currently loaded."""
         with self._lock:
-            return kimg_a in self._loaded and kimg_b in self._loaded
+            return index_a in self._loaded and index_b in self._loaded
 
-    def loaded_kimgs(self) -> set[int]:
-        """The kimgs of all currently-loaded snapshots."""
+    def loaded_indices(self) -> set[int]:
+        """The indices of all currently-loaded snapshots."""
         with self._lock:
             return set(self._loaded)
 
@@ -145,16 +156,6 @@ class SnapshotManager:
         """How many desired snapshots are not yet loaded."""
         with self._lock:
             return len(self._desired - self._loaded.keys())
-
-    def _window_kimgs(self, kimg_a: int, kimg_b: int) -> set[int]:
-        indices = _compute_window(
-            len(self._snapshots),
-            self._index_of.get(self._canonical_kimg),
-            self._index_of[kimg_a],
-            self._index_of[kimg_b],
-            self._window_size,
-        )
-        return {self._snapshots[index].kimg for index in indices}
 
     def _loader_loop(self) -> None:
         while self._running:
@@ -171,21 +172,21 @@ class SnapshotManager:
         """
         with self._lock:
             evicted = self._loaded.keys() - self._desired
-            for kimg in evicted:
-                del self._loaded[kimg]
+            for index in evicted:
+                del self._loaded[index]
             pending = sorted(self._desired - self._loaded.keys())
-        for kimg in evicted:
-            logger.debug("Snapshot manager evicted kimg %d", kimg)
+        for index in evicted:
+            logger.debug("Snapshot manager evicted index %d", index)
         if not pending:
             return False
 
         target = pending[0]
-        network = self._loader(self._snapshots[self._index_of[target]].pkl_path)
+        network = self._loader(self._snapshots[target].pkl_path)
         with self._lock:
             stored = target in self._desired
             if stored:
                 self._loaded[target] = network
             more = bool(self._desired - self._loaded.keys())
         if stored:
-            logger.info("Snapshot manager loaded kimg %d", target)
+            logger.info("Snapshot manager loaded index %d", target)
         return more

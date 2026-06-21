@@ -58,7 +58,7 @@ def test_alpha_one_returns_upper_network_directly():
     assert blender(100, 200, 1.0) is net_b
 
 
-def test_equal_kimgs_returns_that_network_directly():
+def test_equal_indices_returns_that_network_directly():
     blender, net_a, _ = make_blender_with_pair()
     assert blender(100, 100, 0.5) is net_a
 
@@ -86,5 +86,5 @@ def test_blends_the_requested_pair_among_several():
     blender.cache_snapshot(100, StubNet(1.0, 0))
     blender.cache_snapshot(200, StubNet(5.0, 0))
     blender.cache_snapshot(300, StubNet(9.0, 0))
-    blended = blender(100, 300, 0.5)  # blends 1.0 and 9.0, ignores kimg 200
+    blended = blender(100, 300, 0.5)  # blends 1.0 and 9.0, ignores index 200
     assert torch.allclose(blended.weight, torch.full((2, 2), 5.0))

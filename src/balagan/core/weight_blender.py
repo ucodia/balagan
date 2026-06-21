@@ -29,12 +29,12 @@ class WeightBlender:
         self._blend_net: torch.nn.Module | None = None
         self._blend_state: dict[str, torch.Tensor] | None = None
 
-    def cache_snapshot(self, kimg: int, network: torch.nn.Module) -> None:
+    def cache_snapshot(self, index: int, network: torch.nn.Module) -> None:
         """Cache a snapshot's network and a reference to its state_dict, keyed by
-        kimg. The first cached snapshot also seeds the pre-allocated blend target.
+        index. The first cached snapshot also seeds the pre-allocated blend target.
         """
-        self._networks[kimg] = network
-        self._state_dicts[kimg] = {
+        self._networks[index] = network
+        self._state_dicts[index] = {
             key: value.detach() for key, value in network.state_dict().items()
         }
         if self._blend_net is None:
@@ -42,31 +42,31 @@ class WeightBlender:
             # dict(state_dict()) captures live references to the target's
             # tensors, so writing into them mutates the blend network.
             self._blend_state = dict(self._blend_net.state_dict())
-            logger.info("Weight blender allocated its blend target from kimg %d", kimg)
+            logger.info("Weight blender allocated its blend target from index %d", index)
 
-    def evict_snapshot(self, kimg: int) -> None:
+    def evict_snapshot(self, index: int) -> None:
         """Drop a snapshot's cached network and state_dict."""
-        self._networks.pop(kimg, None)
-        self._state_dicts.pop(kimg, None)
+        self._networks.pop(index, None)
+        self._state_dicts.pop(index, None)
 
-    def is_cached(self, kimg: int) -> bool:
+    def is_cached(self, index: int) -> bool:
         """Whether a snapshot's state_dict is currently cached."""
-        return kimg in self._state_dicts
+        return index in self._state_dicts
 
-    def __call__(self, kimg_a: int, kimg_b: int, alpha: float) -> torch.nn.Module:
+    def __call__(self, index_a: int, index_b: int, alpha: float) -> torch.nn.Module:
         """Return the network for blend factor ``alpha`` between two snapshots.
 
         Fast paths return a cached network directly: ``alpha == 0`` (or equal
         snapshots) yields the lower network, ``alpha == 1`` the upper. Otherwise
         the weights are lerped in place into the pre-allocated blend target.
         """
-        if kimg_a == kimg_b or alpha == 0.0:
-            return self._networks[kimg_a]
+        if index_a == index_b or alpha == 0.0:
+            return self._networks[index_a]
         if alpha == 1.0:
-            return self._networks[kimg_b]
+            return self._networks[index_b]
 
-        sd_lower = self._state_dicts[kimg_a]
-        sd_upper = self._state_dicts[kimg_b]
+        sd_lower = self._state_dicts[index_a]
+        sd_upper = self._state_dicts[index_b]
         assert self._blend_net is not None and self._blend_state is not None
         for key, dst in self._blend_state.items():
             lower = sd_lower[key]

@@ -21,10 +21,10 @@ def fake_loader(pkl_path: Path) -> FakeSynthesis:
 def make_snapshots(count: int) -> list[SnapshotInfo]:
     return [
         SnapshotInfo(
-            kimg=index * 100,
-            pkl_path=Path(f"network-snapshot-{index * 100:06d}.pkl"),
+            index=i,
+            pkl_path=Path(f"network-snapshot-{i * 100:06d}.pkl"),
         )
-        for index in range(count)
+        for i in range(count)
     ]
 
 
@@ -68,108 +68,108 @@ def test_window_without_canonical_still_fills_window():
 
 def test_prime_loads_the_window_synchronously():
     manager = SnapshotManager(
-        make_snapshots(20), canonical_kimg=600, loader=fake_loader, window_size=8
+        make_snapshots(20), canonical_index=6, loader=fake_loader, window_size=8
     )
-    manager.prime(1800, 1900)  # indices 18 and 19, canonical index 6
-    for kimg in (600, 1300, 1400, 1500, 1600, 1700, 1800, 1900):
-        assert manager.get_synthesis(kimg) is not None
+    manager.prime(18, 19)  # indices 18 and 19, canonical index 6
+    for index in (6, 13, 14, 15, 16, 17, 18, 19):
+        assert manager.get_synthesis(index) is not None
     assert manager.get_synthesis(0) is None  # index 0 is outside the window
 
 
 def test_get_synthesis_returns_none_before_loading():
     manager = SnapshotManager(
-        make_snapshots(20), canonical_kimg=600, loader=fake_loader
+        make_snapshots(20), canonical_index=6, loader=fake_loader
     )
-    assert manager.get_synthesis(1800) is None
+    assert manager.get_synthesis(18) is None
 
 
 def test_is_pair_ready_reflects_loaded_state():
     manager = SnapshotManager(
-        make_snapshots(20), canonical_kimg=600, loader=fake_loader, window_size=8
+        make_snapshots(20), canonical_index=6, loader=fake_loader, window_size=8
     )
-    assert not manager.is_pair_ready(1800, 1900)
-    manager.prime(1800, 1900)
-    assert manager.is_pair_ready(1800, 1900)
+    assert not manager.is_pair_ready(18, 19)
+    manager.prime(18, 19)
+    assert manager.is_pair_ready(18, 19)
 
 
 def test_prime_evicts_snapshots_outside_the_new_window():
     manager = SnapshotManager(
-        make_snapshots(20), canonical_kimg=600, loader=fake_loader, window_size=8
+        make_snapshots(20), canonical_index=6, loader=fake_loader, window_size=8
     )
-    manager.prime(1800, 1900)
-    assert manager.get_synthesis(1700) is not None
-    manager.prime(0, 100)  # jump to the opposite edge
-    assert manager.get_synthesis(1700) is None  # evicted
+    manager.prime(18, 19)
+    assert manager.get_synthesis(17) is not None
+    manager.prime(0, 1)  # jump to the opposite edge
+    assert manager.get_synthesis(17) is None  # evicted
     assert manager.get_synthesis(0) is not None
-    assert manager.get_synthesis(100) is not None
+    assert manager.get_synthesis(1) is not None
 
 
 def test_loaded_network_matches_its_snapshot_path():
     manager = SnapshotManager(
-        make_snapshots(20), canonical_kimg=600, loader=fake_loader, window_size=8
+        make_snapshots(20), canonical_index=6, loader=fake_loader, window_size=8
     )
-    manager.prime(1800, 1900)
-    assert manager.get_synthesis(1800).pkl_path == Path("network-snapshot-001800.pkl")
+    manager.prime(18, 19)
+    assert manager.get_synthesis(18).pkl_path == Path("network-snapshot-001800.pkl")
 
 
 def test_background_thread_loads_after_set_active_pair():
     manager = SnapshotManager(
-        make_snapshots(20), canonical_kimg=600, loader=fake_loader, window_size=8
+        make_snapshots(20), canonical_index=6, loader=fake_loader, window_size=8
     )
     manager.start()
     try:
-        manager.set_active_pair(1800, 1900)
+        manager.set_active_pair(18, 19)
         deadline = time.monotonic() + 5.0
-        while not manager.is_pair_ready(1800, 1900) and time.monotonic() < deadline:
+        while not manager.is_pair_ready(18, 19) and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert manager.is_pair_ready(1800, 1900)
+        assert manager.is_pair_ready(18, 19)
     finally:
         manager.stop()
 
 
-def test_loaded_kimgs_reports_the_resident_snapshots():
+def test_loaded_indices_reports_the_resident_snapshots():
     manager = SnapshotManager(
-        make_snapshots(20), canonical_kimg=600, loader=fake_loader, window_size=8
+        make_snapshots(20), canonical_index=6, loader=fake_loader, window_size=8
     )
-    assert manager.loaded_kimgs() == set()
-    manager.prime(1800, 1900)
-    assert manager.loaded_kimgs() == {600, 1300, 1400, 1500, 1600, 1700, 1800, 1900}
+    assert manager.loaded_indices() == set()
+    manager.prime(18, 19)
+    assert manager.loaded_indices() == {6, 13, 14, 15, 16, 17, 18, 19}
 
 
 def test_pending_count_reports_snapshots_awaiting_load():
     manager = SnapshotManager(
-        make_snapshots(20), canonical_kimg=600, loader=fake_loader, window_size=8
+        make_snapshots(20), canonical_index=6, loader=fake_loader, window_size=8
     )
-    manager.prime(0, 100)
-    manager.set_active_pair(1800, 1900)  # desired jumps; loader thread not started
+    manager.prime(0, 1)
+    manager.set_active_pair(18, 19)  # desired jumps; loader thread not started
     assert manager.pending_count() > 0
 
 
 def test_loaded_networks_returns_the_resident_networks():
     manager = SnapshotManager(
-        make_snapshots(20), canonical_kimg=600, loader=fake_loader, window_size=8
+        make_snapshots(20), canonical_index=6, loader=fake_loader, window_size=8
     )
-    manager.prime(1800, 1900)
+    manager.prime(18, 19)
     networks = manager.loaded_networks()
-    assert set(networks) == manager.loaded_kimgs()
-    assert networks[1800].pkl_path == Path("network-snapshot-001800.pkl")
+    assert set(networks) == manager.loaded_indices()
+    assert networks[18].pkl_path == Path("network-snapshot-001800.pkl")
 
 
 def test_loaded_networks_returns_a_copy_isolated_from_later_eviction():
     manager = SnapshotManager(
-        make_snapshots(20), canonical_kimg=600, loader=fake_loader, window_size=8
+        make_snapshots(20), canonical_index=6, loader=fake_loader, window_size=8
     )
-    manager.prime(1800, 1900)
+    manager.prime(18, 19)
     networks = manager.loaded_networks()
-    manager.prime(0, 100)  # jump to the opposite edge, evicting the far window
-    assert 1800 in networks  # the earlier caller's view is unaffected
-    assert manager.get_synthesis(1800) is None  # though the manager has evicted it
+    manager.prime(0, 1)  # jump to the opposite edge, evicting the far window
+    assert 18 in networks  # the earlier caller's view is unaffected
+    assert manager.get_synthesis(18) is None  # though the manager has evicted it
 
 
 def test_window_size_zero_keeps_every_snapshot_resident():
     snapshots = make_snapshots(20)
     manager = SnapshotManager(
-        snapshots, canonical_kimg=600, loader=fake_loader, window_size=0
+        snapshots, canonical_index=6, loader=fake_loader, window_size=0
     )
-    manager.prime(0, 100)
-    assert manager.loaded_kimgs() == {snap.kimg for snap in snapshots}
+    manager.prime(0, 1)
+    assert manager.loaded_indices() == {snap.index for snap in snapshots}

@@ -20,7 +20,7 @@ def test_cli_help_lists_options():
     assert "--snapshots-dir" in result.output
     assert "--headless" in result.output
     assert "--debug" in result.output
-    assert "--canonical-kimg" in result.output
+    assert "--canonical-index" in result.output
 
 
 def test_cli_headless_requires_a_snapshots_dir():

@@ -46,18 +46,11 @@ class StubSynthesis(torch.nn.Module):
         return torch.zeros(ws.shape[0], 3, 64, 64)
 
 
-def _snapshot(kimg: int) -> SnapshotInfo:
-    return SnapshotInfo(kimg=kimg, pkl_path=Path(f"snap-{kimg}.pkl"))
+def _snapshot(index: int) -> SnapshotInfo:
+    return SnapshotInfo(index=index, pkl_path=Path(f"snap-{index}.pkl"))
 
 
-SNAPSHOTS = [
-    _snapshot(0),
-    _snapshot(100),
-    _snapshot(200),
-    _snapshot(300),
-    _snapshot(400),
-    _snapshot(500),
-]
+SNAPSHOTS = [_snapshot(i) for i in range(6)]
 
 
 def make_engine(window_size: int = 6) -> tuple[Engine, RuntimeState, WeightBlender]:
@@ -69,7 +62,7 @@ def make_engine(window_size: int = 6) -> tuple[Engine, RuntimeState, WeightBlend
         latent_navigator=LatentNavigator(StubMapping(), z_dim=4),
         weight_blender=weight_blender,
         snapshot_manager=SnapshotManager(
-            SNAPSHOTS, 200, lambda pkl_path: StubSynthesis(), window_size
+            SNAPSHOTS, 2, lambda pkl_path: StubSynthesis(), window_size
         ),
         runtime_state=runtime_state,
     )
@@ -159,30 +152,30 @@ class _RacySnapshotManager:
     """Engine test double modeling a snapshot the loader is evicting mid-frame.
 
     Its granular reads disagree the way a concurrent eviction makes them:
-    ``loaded_kimgs`` still lists the snapshot while ``get_synthesis`` already
+    ``loaded_indices`` still lists the snapshot while ``get_synthesis`` already
     returns None for it. ``loaded_networks`` instead hands back a single
     atomic, reference-holding view -- the view render_frame must rely on so it
     never blends a snapshot it has not cached.
     """
 
-    def __init__(self, kimg: int) -> None:
-        self._kimg = kimg
+    def __init__(self, index: int) -> None:
+        self._index = index
         self._network = StubSynthesis()
 
-    def set_active_pair(self, kimg_a: int, kimg_b: int) -> None:
+    def set_active_pair(self, index_a: int, index_b: int) -> None:
         pass
 
-    def is_pair_ready(self, kimg_a: int, kimg_b: int) -> bool:
+    def is_pair_ready(self, index_a: int, index_b: int) -> bool:
         return False
 
-    def loaded_kimgs(self) -> set[int]:
-        return {self._kimg}
+    def loaded_indices(self) -> set[int]:
+        return {self._index}
 
-    def get_synthesis(self, kimg: int) -> torch.nn.Module | None:
+    def get_synthesis(self, index: int) -> torch.nn.Module | None:
         return None
 
     def loaded_networks(self) -> dict[int, torch.nn.Module]:
-        return {self._kimg: self._network}
+        return {self._index: self._network}
 
     def pending_count(self) -> int:
         return 0
@@ -198,7 +191,7 @@ def test_render_frame_blends_only_cached_snapshots_when_eviction_races_the_frame
         interpolator=Interpolator(SNAPSHOTS),
         latent_navigator=LatentNavigator(StubMapping(), z_dim=4),
         weight_blender=WeightBlender(),
-        snapshot_manager=_RacySnapshotManager(kimg=200),
+        snapshot_manager=_RacySnapshotManager(index=2),
         runtime_state=runtime_state,
     )
     frame = engine.render_frame()
@@ -211,7 +204,7 @@ def test_debug_overlay_marks_the_frame_only_when_enabled():
     frame; with it disabled the frame is left untouched."""
     engine, state, _ = make_engine()
     engine.prime()
-    engine._last_status = "30.0 fps | t=0.500 | kimg 0->100 @ 0.000 | loaded 6"
+    engine._last_status = "30.0 fps | snap-0.pkl (100%) | snap-1.pkl (0%)"
     plain = engine.render_frame()
     state.update(debug=True)
     overlaid = engine.render_frame()
@@ -229,7 +222,7 @@ def test_build_engine_uses_the_injected_runtime_state(monkeypatch):
     )
     config = EngineConfig(
         snapshots_dir=Path("run"),
-        canonical_mapping_kimg=200,
+        canonical_index=2,
         snapshots=tuple(SNAPSHOTS),
     )
     sentinel = RuntimeState()
@@ -248,11 +241,7 @@ def test_debug_overlay_skips_an_empty_status():
 
 
 class _FakeClock:
-    """Deterministic stand-in for the ``time`` module the engine calls.
-
-    ``perf_counter`` reads the virtual clock; ``sleep`` advances it (recording
-    each duration); ``advance`` simulates work elapsing between calls.
-    """
+    """Deterministic stand-in for the ``time`` module the engine calls."""
 
     def __init__(self, start: float = 0.0) -> None:
         self.now = start
@@ -270,18 +259,14 @@ class _FakeClock:
 
 
 def test_limit_framerate_absorbs_post_render_overhead(monkeypatch):
-    """The limiter must hold a steady 1/cap frame period even when the caller
-    does work *after* render_frame returns (Spout send, QImage copy). This is
-    the regression test for the absolute-deadline scheduler: relative-per-frame
-    scheduling stacks the post-render overhead on top of the cap every frame."""
     engine, _, _ = make_engine()
     clock = _FakeClock()
     monkeypatch.setattr("balagan.core.engine.time", clock)
 
     fps_cap = 30
     period = 1.0 / fps_cap
-    render = 0.005  # render work inside render_frame
-    post = 0.006  # post-render overhead the limiter never sees directly
+    render = 0.005
+    post = 0.006
     starts = []
     for _ in range(12):
         starts.append(clock.now)
@@ -289,21 +274,17 @@ def test_limit_framerate_absorbs_post_render_overhead(monkeypatch):
         engine._limit_framerate(fps_cap, starts[-1])
         clock.advance(post)
 
-    # First period warms up the deadline; every period after locks to 1/cap,
-    # the post-render overhead absorbed into the next frame's shorter sleep.
     periods = [b - a for a, b in zip(starts, starts[1:])]
     for measured in periods[1:]:
         assert measured == pytest.approx(period, abs=1e-9)
 
 
 def test_limit_framerate_disabled_resets_deadline_and_never_sleeps(monkeypatch):
-    """fps_cap <= 0 must return immediately without sleeping and clear the
-    deadline so a later re-enable re-anchors cleanly."""
     engine, _, _ = make_engine()
     clock = _FakeClock()
     monkeypatch.setattr("balagan.core.engine.time", clock)
 
-    engine._limit_framerate(30, clock.now)  # establish a deadline
+    engine._limit_framerate(30, clock.now)
     assert engine._next_deadline is not None
 
     clock.sleeps.clear()
@@ -313,24 +294,20 @@ def test_limit_framerate_disabled_resets_deadline_and_never_sleeps(monkeypatch):
 
 
 def test_limit_framerate_resyncs_after_a_stall(monkeypatch):
-    """After a stall longer than the period, the limiter must snap the deadline
-    forward to now+period rather than fast-forwarding through frames with a
-    burst of zero-length sleeps to 'catch up'."""
     engine, _, _ = make_engine()
     clock = _FakeClock()
     monkeypatch.setattr("balagan.core.engine.time", clock)
 
     fps_cap = 30
     period = 1.0 / fps_cap
-    engine._limit_framerate(fps_cap, clock.now)  # warm up
+    engine._limit_framerate(fps_cap, clock.now)
 
-    clock.advance(period * 5)  # render work far exceeds the budget
+    clock.advance(period * 5)
     clock.sleeps.clear()
     engine._limit_framerate(fps_cap, clock.now)
-    assert clock.sleeps == []  # behind schedule: no sleep
+    assert clock.sleeps == []
     assert engine._next_deadline == pytest.approx(clock.now + period, abs=1e-9)
 
-    # The next frame sleeps a normal amount, not a catch-up burst.
     frame_start = clock.now
     clock.advance(0.001)
     engine._limit_framerate(fps_cap, frame_start)
