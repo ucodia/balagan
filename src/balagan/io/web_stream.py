@@ -139,6 +139,13 @@ class WebStreamOutput:
         self._encoder = VideoEncoder(width, height, self._encoder_config)
         self._sequence = 0
 
+        # Per-second diagnostic counters (temporary; for latency/throughput work).
+        self._stat_frames = 0
+        self._stat_encode_s = 0.0
+        self._stat_drops = 0
+        self._stat_streams = 0
+        self._stat_last = time.perf_counter()
+
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server = None
         self._subscribers: set = set()
@@ -172,7 +179,10 @@ class WebStreamOutput:
 
     def send(self, frame_uint8_rgb: np.ndarray) -> None:
         """Encode one ``[H, W, 3]`` uint8 RGB frame and queue it for delivery."""
-        for chunk in self._encoder.encode(frame_uint8_rgb):
+        encode_start = time.perf_counter()
+        chunks = self._encoder.encode(frame_uint8_rgb)
+        self._stat_encode_s += time.perf_counter() - encode_start
+        for chunk in chunks:
             seq = self._sequence
             self._sequence = (self._sequence + 1) & 0xFFFFFFFF
             flags = _KEYFRAME_FLAG if chunk.is_keyframe else 0
@@ -185,6 +195,35 @@ class WebStreamOutput:
             except RuntimeError:
                 # Loop is shutting down; drop the frame rather than crash render.
                 return
+        self._stat_frames += 1
+        self._maybe_log_stats()
+
+    def _maybe_log_stats(self) -> None:
+        """Once per second, log per-frame timing and queue/stream counters.
+
+        Temporary instrumentation for latency/throughput diagnosis: it shows
+        whether per-frame cost grows on the encode side or the QUIC side.
+        """
+        elapsed = time.perf_counter() - self._stat_last
+        if elapsed < 1.0:
+            return
+        frames = self._stat_frames or 1
+        logger.info(
+            "web-stream: %.1f fps | encode %.1f ms/frame | pending %d/%d | "
+            "drops %d/s | streams %d/s | subscribers %d",
+            self._stat_frames / elapsed,
+            1000.0 * self._stat_encode_s / frames,
+            len(self._pending) if self._pending is not None else 0,
+            self._queue_size,
+            self._stat_drops,
+            self._stat_streams,
+            len(self._subscribers),
+        )
+        self._stat_frames = 0
+        self._stat_encode_s = 0.0
+        self._stat_drops = 0
+        self._stat_streams = 0
+        self._stat_last = time.perf_counter()
 
     def close(self) -> None:
         """Flush the encoder, stop the servers, and join the loop thread."""
@@ -309,6 +348,8 @@ class WebStreamOutput:
     def _enqueue(self, payload: bytes) -> None:
         # deque(maxlen) drops the oldest payload when full: exactly the
         # drop-oldest backpressure we want for live frames.
+        if len(self._pending) == self._queue_size:
+            self._stat_drops += 1
         self._pending.append(payload)
         self._wakeup.set()
 
@@ -320,6 +361,7 @@ class WebStreamOutput:
                 payload = self._pending.popleft()
                 for protocol in list(self._subscribers):
                     protocol.send_frame(payload)
+                    self._stat_streams += 1
 
     def _shutdown(self) -> None:
         for protocol in list(self._subscribers):
@@ -362,6 +404,28 @@ class WebStreamOutput:
 
 
 _PROTOCOL_CLASS = None
+
+
+def _finish_send_only_stream(quic, stream_id: int) -> None:
+    """Let aioquic reclaim a finished server-initiated unidirectional stream.
+
+    We open one unidirectional QUIC stream per frame. aioquic only discards a
+    stream once it ``is_finished`` (sender AND receiver finished), but a send-only
+    stream's receiver never receives a FIN, so ``receiver.is_finished`` stays
+    ``False`` forever and the stream is retained in ``quic._streams`` for the life
+    of the connection. ``_write_application`` iterates that dict on every send, so
+    the leak makes per-frame send cost grow without bound and starves the render
+    thread.
+
+    Marking the (non-existent) receiver finished is correct for a send-only stream
+    and lets the stream be reclaimed once its FIN is acknowledged. It reaches into
+    aioquic internals, so it is best-effort: if a future version changes this
+    shape, we simply fall back to the prior (leaking) behaviour rather than crash.
+    """
+    try:
+        quic._streams[stream_id].receiver.is_finished = True
+    except (AttributeError, KeyError):  # pragma: no cover - aioquic internals moved
+        pass
 
 
 def _protocol_class():
@@ -440,6 +504,7 @@ def _make_protocol_class():
                     self._session_id, is_unidirectional=True
                 )
                 self._quic.send_stream_data(stream_id, payload, end_stream=True)
+                _finish_send_only_stream(self._quic, stream_id)
                 self.transmit()
             except Exception:  # noqa: BLE001 — drop this frame, keep the session
                 logger.debug("Dropping frame for a failed WebTransport stream")

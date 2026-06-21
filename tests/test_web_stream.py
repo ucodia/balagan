@@ -220,6 +220,50 @@ def test_client_receives_encoded_frames_over_webtransport(tmp_path):
     assert frames[0][13:17] == b"\x00\x00\x00\x01", "payload is not Annex B"
 
 
+async def _count_server_streams_after_sending(output: WebStreamOutput, port: int):
+    from aioquic.asyncio import connect
+    from aioquic.h3.connection import H3_ALPN
+    from aioquic.quic.configuration import QuicConfiguration
+
+    config = QuicConfiguration(
+        is_client=True, alpn_protocols=H3_ALPN, max_datagram_frame_size=65536
+    )
+    config.verify_mode = ssl.CERT_NONE
+    authority = f"127.0.0.1:{port}"
+
+    async with connect(
+        "127.0.0.1", port, configuration=config, create_protocol=_make_h3_client_class()
+    ) as client:
+        await client.connect_webtransport(authority)
+        await asyncio.wait_for(client.session_ready, 5)
+        await asyncio.sleep(0.2)
+        for i in range(100):
+            output.send(_solid_frame(i % 255))
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(1.0)  # let FINs be acked so finished streams discard
+        protocol = next(iter(output._subscribers))
+        return len(protocol._quic._streams)
+
+
+def test_per_frame_streams_do_not_accumulate(tmp_path):
+    # Each frame is delivered on its own unidirectional QUIC stream. aioquic only
+    # discards a stream once it is "finished", so the server must not leave its
+    # send-only streams un-finished, or self._quic._streams grows without bound
+    # and the per-tick send cost starves the render thread.
+    port = 4462
+    output = _make_output(tmp_path, port=port)
+    try:
+        stream_count = asyncio.run(
+            _count_server_streams_after_sending(output, port)
+        )
+    finally:
+        output.close()
+
+    assert stream_count < 20, (
+        f"{stream_count} streams resident after 100 frames — streams are leaking"
+    )
+
+
 async def _send_control_from_loopback_client(port: int):
     from aioquic.asyncio import connect
     from aioquic.h3.connection import H3_ALPN
