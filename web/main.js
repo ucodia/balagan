@@ -65,6 +65,61 @@ async function readFullStream(readable) {
   return buffer;
 }
 
+// SeedX/seedY are unclamped on the engine; the XY pad maps to this range.
+const SEED_RANGE = 2.0;
+
+async function setupControls(transport) {
+  const stream = await transport.createBidirectionalStream();
+  const writer = stream.writable.getWriter();
+  const encoder = new TextEncoder();
+
+  const send = (addr, value) =>
+    writer.write(encoder.encode(JSON.stringify({ addr, value }) + "\n"));
+
+  const bind = (id, addr) => {
+    const el = document.getElementById(id);
+    el.addEventListener("input", () => send(addr, parseFloat(el.value)));
+  };
+  bind("position", "/position");
+  bind("truncation", "/truncation");
+  bind("speedX", "/seedSpeedX");
+  bind("speedY", "/seedSpeedY");
+
+  const anim = document.getElementById("anim");
+  anim.addEventListener("change", () => send("/seedAnim", anim.checked ? 1 : 0));
+
+  const pad = document.getElementById("seedpad");
+  const padCtx = pad.getContext("2d");
+  const drawPad = (x, y) => {
+    pad.width = pad.clientWidth;
+    pad.height = pad.clientHeight;
+    padCtx.fillStyle = "#161616";
+    padCtx.fillRect(0, 0, pad.width, pad.height);
+    padCtx.fillStyle = "#5af";
+    padCtx.beginPath();
+    padCtx.arc(x * pad.width, y * pad.height, 7, 0, Math.PI * 2);
+    padCtx.fill();
+  };
+  drawPad(0.5, 0.5);
+  let dragging = false;
+  const onMove = (ev) => {
+    if (!dragging) return;
+    const rect = pad.getBoundingClientRect();
+    const nx = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+    const ny = Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height));
+    drawPad(nx, ny);
+    send("/seedX", (nx * 2 - 1) * SEED_RANGE);
+    send("/seedY", (ny * 2 - 1) * SEED_RANGE);
+  };
+  pad.addEventListener("pointerdown", (ev) => {
+    dragging = true;
+    pad.setPointerCapture(ev.pointerId);
+    onMove(ev);
+  });
+  pad.addEventListener("pointermove", onMove);
+  pad.addEventListener("pointerup", () => (dragging = false));
+}
+
 async function run() {
   if (!("WebTransport" in window)) {
     setStatus("WebTransport unavailable — use Chrome/Edge.");
@@ -82,6 +137,7 @@ async function run() {
     return;
   }
   setStatus("connected — waiting for frames…");
+  setupControls(transport).catch((e) => setStatus(`control error: ${e.message}`));
 
   const decoder = makeDecoder();
   let configured = false;

@@ -71,6 +71,7 @@ def _make_h3_client_class():
             super().__init__(*args, **kwargs)
             self._http = None
             self._buffers = {}
+            self._session_id = None
             self.frames = []
             self.session_ready = asyncio.get_event_loop().create_future()
 
@@ -97,6 +98,7 @@ def _make_h3_client_class():
             while self._http is None:
                 await asyncio.sleep(0.01)
             stream_id = self._quic.get_next_available_stream_id()
+            self._session_id = stream_id
             self._http.send_headers(
                 stream_id=stream_id,
                 headers=[
@@ -108,6 +110,13 @@ def _make_h3_client_class():
                 ],
                 end_stream=False,
             )
+            self.transmit()
+
+        def send_control(self, line: bytes):
+            stream_id = self._http.create_webtransport_stream(
+                self._session_id, is_unidirectional=False
+            )
+            self._quic.send_stream_data(stream_id, line, end_stream=False)
             self.transmit()
 
     return _H3Client
@@ -150,3 +159,37 @@ def test_client_receives_encoded_frames_over_webtransport(tmp_path):
     flags, _seq, _ts = struct.unpack(">BIQ", frames[0][:13])
     assert flags & 0x01, "first delivered frame is not a keyframe"
     assert frames[0][13:17] == b"\x00\x00\x00\x01", "payload is not Annex B"
+
+
+async def _send_control_from_loopback_client(port: int):
+    from aioquic.asyncio import connect
+    from aioquic.h3.connection import H3_ALPN
+    from aioquic.quic.configuration import QuicConfiguration
+
+    config = QuicConfiguration(
+        is_client=True, alpn_protocols=H3_ALPN, max_datagram_frame_size=65536
+    )
+    config.verify_mode = ssl.CERT_NONE
+    authority = f"127.0.0.1:{port}"
+
+    async with connect(
+        "127.0.0.1", port, configuration=config, create_protocol=_make_h3_client_class()
+    ) as client:
+        await client.connect_webtransport(authority)
+        await asyncio.wait_for(client.session_ready, 5)
+        client.send_control(b'{"addr": "/position", "value": 0.42}\n')
+        await asyncio.sleep(0.5)
+
+
+def test_control_message_updates_runtime_state_over_webtransport(tmp_path):
+    from balagan.core.runtime_state import RuntimeState
+
+    port = 4457
+    state = RuntimeState()
+    output = _make_output(tmp_path, port=port, runtime_state=state)
+    try:
+        asyncio.run(_send_control_from_loopback_client(port))
+    finally:
+        output.close()
+
+    assert state.snapshot().position == 0.42

@@ -217,8 +217,26 @@ class WebStreamOutput:
             "WebTransport client disconnected (%d total)", len(self._subscribers)
         )
 
-    def on_control(self, message: bytes) -> None:
-        """Hook for the upstream control channel; wired up in a later phase."""
+    def on_control(self, line: bytes) -> None:
+        """Apply one control message (a JSON line) from a browser client.
+
+        Messages share the OSC vocabulary via :func:`apply_control`, so the web
+        surface and OSC drive exactly the same clamped state.
+        """
+        import json
+
+        from balagan.io.control_mapping import apply_control
+
+        if self._runtime_state is None:
+            return
+        try:
+            message = json.loads(line)
+            address = message["addr"]
+            value = message["value"]
+        except (ValueError, KeyError, TypeError):
+            logger.warning("Ignoring malformed web control message: %r", line)
+            return
+        apply_control(self._runtime_state, address, value)
 
 
 _PROTOCOL_CLASS = None
@@ -239,7 +257,7 @@ def _protocol_class():
 def _make_protocol_class():
     from aioquic.asyncio import QuicConnectionProtocol
     from aioquic.h3.connection import H3Connection
-    from aioquic.h3.events import HeadersReceived
+    from aioquic.h3.events import HeadersReceived, WebTransportStreamDataReceived
     from aioquic.quic.events import ProtocolNegotiated
 
     class _Protocol(QuicConnectionProtocol):
@@ -248,6 +266,7 @@ def _make_protocol_class():
             self._server = server
             self._http: H3Connection | None = None
             self._session_id: int | None = None
+            self._control_buffers: dict[int, bytes] = {}
 
         def quic_event_received(self, event) -> None:
             if isinstance(event, ProtocolNegotiated):
@@ -273,6 +292,23 @@ def _make_protocol_class():
                     )
                     self._server.register(self)
                     self.transmit()
+            elif isinstance(event, WebTransportStreamDataReceived):
+                self._on_control_data(event)
+
+        def _on_control_data(self, event) -> None:
+            # Control messages are newline-delimited JSON; buffer per stream and
+            # dispatch each complete line, keeping any partial tail.
+            buffer = self._control_buffers.get(event.stream_id, b"") + event.data
+            *lines, tail = buffer.split(b"\n")
+            for line in lines:
+                if line.strip():
+                    self._server.on_control(line)
+            if event.stream_ended:
+                if tail.strip():
+                    self._server.on_control(tail)
+                self._control_buffers.pop(event.stream_id, None)
+            else:
+                self._control_buffers[event.stream_id] = tail
 
         def send_frame(self, payload: bytes) -> None:
             if self._session_id is None or self._http is None:

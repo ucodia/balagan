@@ -7,74 +7,29 @@ from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_server import ThreadingOSCUDPServer
 
 from balagan.core.runtime_state import RuntimeState
+from balagan.io.control_mapping import CONTROL_ADDRESSES, apply_control
 
 logger = logging.getLogger(__name__)
 
 
-def _clamp(value: float, low: float, high: float) -> float:
-    return min(high, max(low, value))
-
-
-def _single_arg(address: str, args: tuple, converter):
-    """Convert the first OSC argument, or log a warning and return None."""
-    try:
-        return converter(args[0])
-    except (IndexError, TypeError, ValueError):
-        logger.warning("Ignoring malformed OSC message: %s %r", address, args)
-        return None
-
-
 def _build_dispatcher(runtime_state: RuntimeState) -> Dispatcher:
-    """Build the OSC dispatcher mapping the seven endpoints to state updates.
+    """Build the OSC dispatcher mapping the control endpoints to state updates.
 
-    Out-of-range position and truncation values are clamped rather than
-    rejected; messages with missing or wrongly-typed arguments are logged as
-    warnings and ignored.
+    Conversion and clamping are delegated to
+    :func:`balagan.io.control_mapping.apply_control`, the shared vocabulary used
+    by both OSC and the web control channel. Messages with missing arguments are
+    logged as warnings and ignored.
     """
     dispatcher = Dispatcher()
 
-    def on_position(address: str, *args) -> None:
-        value = _single_arg(address, args, float)
-        if value is not None:
-            runtime_state.update(position=_clamp(value, 0.0, 1.0))
+    def handler(address: str, *args) -> None:
+        if not args:
+            logger.warning("Ignoring malformed OSC message: %s %r", address, args)
+            return
+        apply_control(runtime_state, address, args[0])
 
-    def on_seed_x(address: str, *args) -> None:
-        value = _single_arg(address, args, float)
-        if value is not None:
-            runtime_state.update(latent_x=value)
-
-    def on_seed_y(address: str, *args) -> None:
-        value = _single_arg(address, args, float)
-        if value is not None:
-            runtime_state.update(latent_y=value)
-
-    def on_seed_anim(address: str, *args) -> None:
-        value = _single_arg(address, args, int)
-        if value is not None:
-            runtime_state.update(anim_playing=bool(value))
-
-    def on_seed_speed_x(address: str, *args) -> None:
-        value = _single_arg(address, args, float)
-        if value is not None:
-            runtime_state.update(anim_speed_x=value)
-
-    def on_seed_speed_y(address: str, *args) -> None:
-        value = _single_arg(address, args, float)
-        if value is not None:
-            runtime_state.update(anim_speed_y=value)
-
-    def on_truncation(address: str, *args) -> None:
-        value = _single_arg(address, args, float)
-        if value is not None:
-            runtime_state.update(truncation_psi=_clamp(value, 0.0, 1.0))
-
-    dispatcher.map("/position", on_position)
-    dispatcher.map("/seedX", on_seed_x)
-    dispatcher.map("/seedY", on_seed_y)
-    dispatcher.map("/seedAnim", on_seed_anim)
-    dispatcher.map("/seedSpeedX", on_seed_speed_x)
-    dispatcher.map("/seedSpeedY", on_seed_speed_y)
-    dispatcher.map("/truncation", on_truncation)
+    for address in CONTROL_ADDRESSES:
+        dispatcher.map(address, handler)
     return dispatcher
 
 
