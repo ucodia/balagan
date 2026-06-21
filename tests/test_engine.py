@@ -230,14 +230,14 @@ def test_build_engine_uses_the_injected_runtime_state(monkeypatch):
     assert engine.runtime_state is sentinel
 
 
-def test_debug_overlay_skips_an_empty_status():
-    """Before the first status report there is nothing to draw; the debug
-    overlay must leave the frame untouched rather than fail."""
+def test_debug_overlay_draws_frame_counter_before_first_status():
+    """The frame counter must be drawn every frame, even before the first
+    per-second status report, so it can gauge end-to-end rendering delay."""
     engine, state, _ = make_engine()
     engine.prime()
     state.update(debug=True)
     frame = engine.render_frame()
-    assert np.array_equal(frame, np.full((64, 64, 3), 128, np.uint8))
+    assert not np.array_equal(frame, np.full((64, 64, 3), 128, np.uint8))
 
 
 class _FakeClock:

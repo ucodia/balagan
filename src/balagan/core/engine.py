@@ -24,17 +24,21 @@ def _to_uint8_hwc(image: torch.Tensor) -> np.ndarray:
     return image.permute(1, 2, 0).contiguous().cpu().numpy()
 
 
-def _draw_debug_overlay(frame: np.ndarray, status: str) -> np.ndarray:
+def _draw_debug_overlay(frame: np.ndarray, status: str, frame_count: int) -> np.ndarray:
     """Bake the engine status into the frame's bottom-left corner, one metric
-    per line, as white text over a transparent background. Returns the frame
-    unchanged when there is no status to show yet.
+    per line, as white text over a transparent background.
+
+    The frame counter is drawn on its own line and advances every frame (unlike
+    the per-second status), so it can be read off both the GUI window and the web
+    stream to gauge end-to-end rendering delay.
     """
-    if not status:
-        return frame
     image = Image.fromarray(frame)
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default(size=max(12, frame.shape[0] // 40))
-    text = "\n".join(status.split(" | "))
+    lines = [f"frame {frame_count}"]
+    if status:
+        lines.extend(status.split(" | "))
+    text = "\n".join(lines)
     margin = 6
     box = draw.multiline_textbbox((0, 0), text, font=font)
     y = frame.shape[0] - margin - box[3]
@@ -72,6 +76,7 @@ class Engine:
         self._next_deadline: float | None = None
         self._last_log_time = time.perf_counter()
         self._frames_since_log = 0
+        self._frame_count = 0
         self._last_status = ""
 
     @property
@@ -100,6 +105,7 @@ class Engine:
     def render_frame(self) -> np.ndarray:
         """Produce one frame as a uint8 HWC RGB array."""
         frame_start = time.perf_counter()
+        self._frame_count += 1
         delta = (
             frame_start - self._last_frame_start
             if self._last_frame_start is not None
@@ -144,7 +150,7 @@ class Engine:
 
         self._report(state.position, index_a, index_b, alpha)
         if state.debug:
-            frame = _draw_debug_overlay(frame, self._last_status)
+            frame = _draw_debug_overlay(frame, self._last_status, self._frame_count)
         self._limit_framerate(state.fps_cap, frame_start)
         return frame
 
