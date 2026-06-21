@@ -273,6 +273,16 @@ class ControlPanel(QWidget):
         if index >= 0:
             self._canonical.setCurrentIndex(index)
         self._canonical.blockSignals(False)
+        self._update_position_ticks(len(config.snapshots))
+
+    def _update_position_ticks(self, snapshot_count: int) -> None:
+        if snapshot_count >= 2:
+            self._position.setTickPosition(QSlider.TickPosition.TicksBelow)
+            self._position.setTickInterval(
+                round(_POSITION_STEPS / (snapshot_count - 1))
+            )
+        else:
+            self._position.setTickPosition(QSlider.TickPosition.NoTicks)
 
     def set_engine_controls_enabled(self, enabled: bool) -> None:
         """Enable or disable the engine-dependent controls. The folder picker
