@@ -36,6 +36,9 @@ function hexToBytes(hex) {
 const frameTimes = [];
 let lastStatusAt = 0;
 
+const DEBUG = false; // set true to log per-frame arrival/decode timing
+let lastOutputAt = 0;
+
 function makeDecoder() {
   return new VideoDecoder({
     output: (frame) => {
@@ -46,6 +49,11 @@ function makeDecoder() {
       frame.close();
       // Actual frames painted in the last second = rendered FPS.
       const now = performance.now();
+      if (DEBUG) {
+        const outGap = lastOutputAt ? now - lastOutputAt : 0;
+        if (outGap > 200) console.warn(`OUTPUT gap ${outGap.toFixed(0)}ms`);
+        lastOutputAt = now;
+      }
       frameTimes.push(now);
       while (frameTimes.length && frameTimes[0] <= now - 1000) frameTimes.shift();
       if (now - lastStatusAt > 250) {
@@ -53,7 +61,10 @@ function makeDecoder() {
         lastStatusAt = now;
       }
     },
-    error: (e) => setStatus(`decoder error: ${e.message}`),
+    error: (e) => {
+      console.error("decoder error", e);
+      setStatus(`decoder error: ${e.message}`);
+    },
   });
 }
 
@@ -163,6 +174,8 @@ async function run() {
 
   const decoder = makeDecoder();
   let configured = false;
+  let lastRecvAt = 0;
+  let expectedSeq = null;
 
   const reader = transport.incomingUnidirectionalStreams.getReader();
   for (;;) {
@@ -175,8 +188,23 @@ async function run() {
     const view = new DataView(buffer.buffer, 0, HEADER_BYTES);
     const flags = view.getUint8(0);
     const isKeyframe = (flags & KEYFRAME_FLAG) !== 0;
+    const seq = view.getUint32(1);
     const timestampMs = Number(view.getBigUint64(5));
     const data = buffer.subarray(HEADER_BYTES);
+
+    if (DEBUG) {
+      const now = performance.now();
+      const recvGap = lastRecvAt ? now - lastRecvAt : 0;
+      lastRecvAt = now;
+      const ooo = expectedSeq !== null && seq !== expectedSeq ? ` OOO(exp ${expectedSeq})` : "";
+      expectedSeq = (seq + 1) >>> 0;
+      if (isKeyframe || recvGap > 200 || ooo) {
+        console.log(
+          `recv seq=${seq} key=${isKeyframe} bytes=${data.length} ` +
+            `recvGap=${recvGap.toFixed(0)}ms qlen=${decoder.decodeQueueSize}${ooo}`
+        );
+      }
+    }
 
     if (!configured) {
       if (!isKeyframe) continue; // can't start mid-GOP

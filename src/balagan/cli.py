@@ -179,6 +179,12 @@ def _run_gui(
     help="HTTP port hosting the browser client for --output web.",
 )
 @click.option(
+    "--web-codec",
+    default=None,
+    help="Override the web encoder (e.g. libx264, hevc_videotoolbox); default is "
+    "the platform's H.264 hardware encoder.",
+)
+@click.option(
     "--web-host",
     default="127.0.0.1",
     show_default=True,
@@ -200,7 +206,7 @@ def _run_gui(
     show_default=True,
     help="Log file directory.",
 )
-def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_kind, output_name, web_port, web_bitrate, web_cert, web_key, web_ui_port, web_host, device, window_size, log_dir):
+def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_kind, output_name, web_port, web_bitrate, web_cert, web_key, web_ui_port, web_codec, web_host, device, window_size, log_dir):
     """Real-time interpolation engine blending StyleGAN training snapshots."""
     from balagan.logging_config import setup_logging
 
@@ -232,6 +238,7 @@ def main(snapshots_dir, canonical_index, headless, debug, osc_port, output_kind,
         name=output_name,
         web_port=web_port,
         web_bitrate=web_bitrate,
+        web_codec=web_codec,
         web_cert=web_cert,
         web_key=web_key,
         web_dir=_WEB_DIR,

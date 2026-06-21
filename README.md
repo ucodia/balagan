@@ -44,9 +44,15 @@ uv run balagan --help
 
 `--output web` streams rendered frames to a browser over WebTransport
 (HTTP/3 / QUIC), decoded with WebCodecs — no native client, no viewer-side GPU.
-Frames are hardware-encoded (VideoToolbox on macOS, NVENC on Windows, libx264
-fallback elsewhere). The default Syphon/Spout output is unchanged and remains the
-default (`--output auto`).
+The default Syphon/Spout output is unchanged and remains the default
+(`--output auto`).
+
+The web path encodes with **libx264** (`tune=zerolatency`) by default on every
+platform: the hardware H.264 encoders (VideoToolbox, NVENC) emit bitstreams that
+browser decoders buffer and stall on at each keyframe, adding latency and a
+periodic freeze. x264's low-latency signaling decodes immediately, and the
+`superfast` preset keeps encode well under a frame at ~1024px. To experiment with
+a hardware encoder anyway, pass e.g. `--web-codec h264_videotoolbox`.
 
 WebTransport requires TLS. For local development, generate a short-lived
 self-signed certificate that the browser trusts via `serverCertificateHashes`:

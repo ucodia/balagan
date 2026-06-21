@@ -13,7 +13,6 @@ framing natively when used without a container, so no bitstream filter is needed
 """
 
 import logging
-import sys
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -47,42 +46,40 @@ class EncodedChunk:
     is_keyframe: bool
 
 
-def default_config(*, fps: int, bitrate: int, hevc: bool = False) -> EncoderConfig:
-    """Build the platform-appropriate encoder config.
+# Default web encoder. libx264 with a low-latency preset is the default on every
+# platform: the hardware H.264 encoders (VideoToolbox, NVENC) produce bitstreams
+# that browser decoders buffer and stall on at each keyframe, whereas x264's
+# `tune=zerolatency` emits the low-latency signaling browsers honour. The hardware
+# encoders remain selectable by name for native consumers or experimentation.
+DEFAULT_WEB_CODEC = "libx264"
 
-    macOS uses VideoToolbox with realtime CBR; Windows uses NVENC's
-    ultra-low-latency preset with intra refresh; anything else falls back to
-    libx264 ``tune=zerolatency`` (not a shipping path).
+
+def config_for(codec: str, *, fps: int, bitrate: int) -> EncoderConfig:
+    """Build the encoder config for ``codec`` with its low-latency tuning.
+
+    libx264/libx265 use ``preset=superfast tune=zerolatency``; VideoToolbox uses
+    realtime CBR; NVENC uses the ultra-low-latency preset with intra refresh.
+    Unknown codecs get no extra options.
     """
-    family = "hevc" if hevc else "h264"
     keyframe_interval = max(1, fps * 2)
-
-    if sys.platform == "darwin":
+    intra_refresh = False
+    if codec.startswith("libx"):
+        options = {"preset": "superfast", "tune": "zerolatency"}
+    elif codec.endswith("_videotoolbox"):
         # Low-latency rate control does not combine with VBR, so use CBR only.
-        return EncoderConfig(
-            codec=f"{family}_videotoolbox",
-            bitrate=bitrate,
-            fps=fps,
-            keyframe_interval=keyframe_interval,
-            intra_refresh=False,
-            options={"realtime": "true", "prio_speed": "true"},
-        )
-    if sys.platform == "win32":
-        return EncoderConfig(
-            codec=f"{family}_nvenc",
-            bitrate=bitrate,
-            fps=fps,
-            keyframe_interval=keyframe_interval,
-            intra_refresh=True,
-            options={"preset": "p1", "tune": "ull", "rc": "cbr", "bf": "0"},
-        )
+        options = {"realtime": "true", "prio_speed": "true"}
+    elif codec.endswith("_nvenc"):
+        options = {"preset": "p1", "tune": "ull", "rc": "cbr", "bf": "0"}
+        intra_refresh = True
+    else:
+        options = {}
     return EncoderConfig(
-        codec="libx265" if hevc else "libx264",
+        codec=codec,
         bitrate=bitrate,
         fps=fps,
         keyframe_interval=keyframe_interval,
-        intra_refresh=False,
-        options={"tune": "zerolatency"},
+        intra_refresh=intra_refresh,
+        options=options,
     )
 
 

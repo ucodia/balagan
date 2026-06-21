@@ -11,9 +11,10 @@ import numpy as np
 import pytest
 
 from balagan.io.video_encoder import (
+    DEFAULT_WEB_CODEC,
     EncoderConfig,
     VideoEncoder,
-    default_config,
+    config_for,
 )
 
 
@@ -59,12 +60,25 @@ def test_handles_frame_size_change():
     sys.platform not in ("darwin", "win32"),
     reason="hardware encoders only exist on macOS (VideoToolbox) and Windows (NVENC)",
 )
-def test_hardware_encoder_default():
-    config = default_config(fps=30, bitrate=4_000_000)
+def test_default_web_codec_is_software():
+    # The web path defaults to libx264 on every platform; hardware H.264 encoders
+    # produce bitstreams that browser decoders stall on at keyframes.
+    assert DEFAULT_WEB_CODEC == "libx264"
+    config = config_for(DEFAULT_WEB_CODEC, fps=30, bitrate=4_000_000)
+    assert config.options.get("tune") == "zerolatency"
+
+
+@pytest.mark.skipif(
+    sys.platform not in ("darwin", "win32"),
+    reason="hardware encoders only exist on macOS (VideoToolbox) and Windows (NVENC)",
+)
+def test_hardware_encoder_is_tuned_and_usable():
+    codec = "h264_videotoolbox" if sys.platform == "darwin" else "h264_nvenc"
+    config = config_for(codec, fps=30, bitrate=4_000_000)
     try:
         encoder = VideoEncoder(64, 64, config)
     except Exception:  # noqa: BLE001 — no hardware encoder on this machine
-        pytest.skip(f"{config.codec} unavailable on this machine")
+        pytest.skip(f"{codec} unavailable on this machine")
 
     chunks = []
     for i in range(4):

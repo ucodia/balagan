@@ -111,7 +111,7 @@ class WebStreamOutput:
         ui_port: int = 8000,
         ui_host: str = "127.0.0.1",
     ) -> None:
-        from balagan.io.video_encoder import EncoderConfig, default_config
+        from balagan.io.video_encoder import DEFAULT_WEB_CODEC, config_for
 
         self._name = name
         self._host = host
@@ -122,17 +122,9 @@ class WebStreamOutput:
         self._queue_size = queue_size
         self._ui_httpd = None
 
-        if codec is None:
-            self._encoder_config = default_config(fps=fps, bitrate=bitrate)
-        else:
-            self._encoder_config = EncoderConfig(
-                codec=codec,
-                bitrate=bitrate,
-                fps=fps,
-                keyframe_interval=max(1, fps * 2),
-                intra_refresh=False,
-                options={"tune": "zerolatency"} if codec.startswith("libx") else {},
-            )
+        self._encoder_config = config_for(
+            codec or DEFAULT_WEB_CODEC, fps=fps, bitrate=bitrate
+        )
 
         from balagan.io.video_encoder import VideoEncoder
 
@@ -208,7 +200,7 @@ class WebStreamOutput:
         if elapsed < 1.0:
             return
         frames = self._stat_frames or 1
-        logger.info(
+        logger.debug(
             "web-stream: %.1f fps | encode %.1f ms/frame | pending %d/%d | "
             "drops %d/s | streams %d/s | subscribers %d",
             self._stat_frames / elapsed,
