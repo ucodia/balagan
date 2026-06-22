@@ -550,6 +550,43 @@ browser hardware H.264 decode generally does **not** support. So 4:2:0 is the
 practical quality ceiling for broad browser compatibility — fine here, but a
 constraint to remember if Autolume 3.0 ever needs pixel-exact colour.
 
+### 11.4 Reusable benchmark
+
+`scripts/benchmark_stream.py` renders frames from any run with the live engine
+and reports raw render throughput plus, per codec, encode cost, data rate, and
+PSNR (encode → deterministic decode vs the raw frame). Run it against a single
+FFHQ snapshot as a fixed, model-independent reference:
+
+```bash
+uv run python scripts/benchmark_stream.py --snapshots-dir <ffhq-dir> \
+    --samples-dir ./bench-samples
+```
+
+**Reference run** — StyleGAN2 FFHQ 1024×1024, Apple Silicon (MPS), 25 Mbps
+target, fast latent walk:
+
+| Stage | Result |
+| --- | --- |
+| Raw render | **9.5 fps** (~105 ms/frame) @ 1024² |
+| Chroma 4:2:0 floor | 48.4 dB |
+
+| Codec | encode ms/frame | KB/frame | PSNR |
+| --- | --- | --- | --- |
+| `libx264` superfast (default) | 4.0 | 106 | 41.7 dB |
+| `h264_videotoolbox` | 9.2 | 102 | 41.8 dB |
+| `hevc_videotoolbox` | 6.1 | 102 | 42.1 dB |
+
+Two things this makes clear:
+
+- **Inference dominates the frame budget** (~105 ms). Encode cost (4–9 ms) is
+  immaterial to FPS, so the encoder is chosen on decode behaviour and quality,
+  not speed.
+- **PSNR measures encode fidelity only.** All three codecs are visually
+  comparable at 25 Mbps (~42 dB) — yet `libx264` is the default because PSNR does
+  *not* capture the decoder-side latency and per-keyframe freeze that the
+  hardware bitstreams cause in the browser (§8.2). Always pair a quality
+  benchmark with a glass-to-glass latency check (§9.1).
+
 ---
 
 ## 12. Recommendations for Autolume 3.0
@@ -591,6 +628,7 @@ Concrete carry-forwards, roughly in priority order:
 | `src/balagan/io/dev_cert.py` | self-signed ECDSA cert generation + `cert_sha256()` |
 | `web/index.html`, `web/main.js` | dependency-free browser client (WebTransport + WebCodecs + controls) |
 | `web/generate_cert.py` | dev cert CLI wrapper |
+| `scripts/benchmark_stream.py` | render-throughput + per-codec quality benchmark (§11.4) |
 
 Run it:
 
