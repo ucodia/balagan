@@ -205,9 +205,11 @@ frame). A 13-byte header precedes the encoded payload:
   bit0 = keyframe
 ```
 
-`struct ">BIQ"` = `flags(u8) | sequence(u32) | timestamp_ms(u64)`. The keyframe
-flag lets the client refuse to start mid-GOP; the sequence and timestamp are for
-diagnostics and decoder timestamps.
+`struct ">BIQ"` = `flags(u8) | sequence(u32) | timestamp_ms(u64)`. `flags` bit 0
+(`0x01`) marks a keyframe (the client refuses to start mid-GOP); bit 1 (`0x02`)
+marks a **state message** whose payload is a JSON `RuntimeState` snapshot rather
+than a video frame (§6). The sequence and timestamp are for diagnostics and
+decoder timestamps.
 
 ### 5.2 Bitstream format: Annex B, in-band parameter sets
 
@@ -256,6 +258,22 @@ The browser UI maps gestures to these messages:
 - **drag on the video canvas** → relative `/seedX` `/seedY` (mirrors the Qt
   viewport's Autolume drag: `delta_px × 4e-2 / 13`)
 - **seed speed** sliders + **animate** toggle → `/seedSpeedX/Y`, `/seedAnim`
+
+### 6.1 State reflection (downstream)
+
+Control is not one-way. `RuntimeState` is shared by *all* sources — OSC, the Qt
+GUI, and every connected browser — so the server periodically (~10 Hz) broadcasts
+a JSON snapshot of it to each client on a `_STATE_FLAG` unidirectional stream.
+The browser applies it to its widgets, so a change made over OSC (or by another
+viewer) is reflected everywhere.
+
+Two details keep this stable:
+
+- **No echo loop.** The client sets slider `.value` / checkbox `.checked`
+  programmatically, which does *not* fire `input`/`change` events, so applying a
+  pushed value never sends it back.
+- **No drag-yank.** A control touched within a short grace window (~600 ms) is
+  left alone, so a live drag is never overwritten by a slightly stale push.
 
 ---
 

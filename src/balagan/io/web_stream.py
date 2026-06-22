@@ -35,7 +35,9 @@ logger = logging.getLogger(__name__)
 # flags (uint8) | sequence (uint32) | timestamp in ms (uint64)
 _HEADER = struct.Struct(">BIQ")
 _KEYFRAME_FLAG = 0x01
+_STATE_FLAG = 0x02  # payload is a JSON RuntimeState snapshot, not a video frame
 _DEFAULT_QUEUE_SIZE = 8
+_STATE_PUSH_INTERVAL = 0.1  # seconds between RuntimeState pushes to clients
 
 
 def _display_host(host: str) -> str:
@@ -137,6 +139,7 @@ class WebStreamOutput:
         self._pending: deque | None = None
         self._wakeup: asyncio.Event | None = None
         self._drain_task: asyncio.Task | None = None
+        self._state_task: asyncio.Task | None = None
         self._ready = threading.Event()
         self._thread = threading.Thread(
             target=self._run, name="web-stream", daemon=True
@@ -261,18 +264,20 @@ class WebStreamOutput:
         try:
             loop.run_until_complete(self._start_server())
             self._drain_task = loop.create_task(self._drain())
+            self._state_task = loop.create_task(self._push_state())
             self._ready.set()
             loop.run_forever()
         except Exception:  # noqa: BLE001 — surface startup failures to __init__
             logger.exception("WebTransport server thread crashed")
             self._ready.set()
         finally:
-            if self._drain_task is not None:
-                self._drain_task.cancel()
-                try:
-                    loop.run_until_complete(self._drain_task)
-                except asyncio.CancelledError:
-                    pass
+            for task in (self._drain_task, self._state_task):
+                if task is not None:
+                    task.cancel()
+                    try:
+                        loop.run_until_complete(task)
+                    except asyncio.CancelledError:
+                        pass
             if self._server is not None:
                 self._server.close()
             loop.close()
@@ -312,6 +317,37 @@ class WebStreamOutput:
                 payload = self._pending.popleft()
                 for protocol in list(self._subscribers):
                     protocol.send_frame(payload)
+
+    async def _push_state(self) -> None:
+        """Periodically broadcast the current RuntimeState to clients.
+
+        This keeps the browser UI in sync with control changes from any source
+        (OSC, the Qt GUI, another browser). The snapshot is sent on its own
+        unidirectional stream tagged with ``_STATE_FLAG``; setting a slider from
+        it on the client does not echo back, so there is no feedback loop.
+        """
+        import json
+
+        while True:
+            await asyncio.sleep(_STATE_PUSH_INTERVAL)
+            if self._runtime_state is None or not self._subscribers:
+                continue
+            s = self._runtime_state.snapshot()
+            state = {
+                "type": "state",
+                "position": s.position,
+                "truncation": s.truncation_psi,
+                "seedX": s.latent_x,
+                "seedY": s.latent_y,
+                "seedAnim": bool(s.anim_playing),
+                "seedSpeedX": s.anim_speed_x,
+                "seedSpeedY": s.anim_speed_y,
+            }
+            payload = _HEADER.pack(
+                _STATE_FLAG, 0, int(time.time() * 1000)
+            ) + json.dumps(state).encode()
+            for protocol in list(self._subscribers):
+                protocol.send_frame(payload)
 
     def _shutdown(self) -> None:
         for protocol in list(self._subscribers):

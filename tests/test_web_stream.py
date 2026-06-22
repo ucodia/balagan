@@ -296,3 +296,50 @@ def test_control_message_updates_runtime_state_over_webtransport(tmp_path):
         output.close()
 
     assert state.snapshot().position == 0.42
+
+
+async def _collect_state_from_loopback_client(port: int):
+    from aioquic.asyncio import connect
+    from aioquic.h3.connection import H3_ALPN
+    from aioquic.quic.configuration import QuicConfiguration
+
+    config = QuicConfiguration(
+        is_client=True, alpn_protocols=H3_ALPN, max_datagram_frame_size=65536
+    )
+    config.verify_mode = ssl.CERT_NONE
+    authority = f"127.0.0.1:{port}"
+
+    async with connect(
+        "127.0.0.1", port, configuration=config, create_protocol=_make_h3_client_class()
+    ) as client:
+        await client.connect_webtransport(authority)
+        await asyncio.wait_for(client.session_ready, 5)
+        await asyncio.sleep(0.5)  # receive a few periodic state pushes
+        return client.frames
+
+
+def test_server_pushes_runtime_state_to_clients(tmp_path):
+    # A control change from any source (here simulated by setting RuntimeState
+    # directly, as OSC or the Qt GUI would) must reach connected browsers.
+    import json
+
+    from balagan.core.runtime_state import RuntimeState
+
+    port = 4463
+    state = RuntimeState()
+    state.update(position=0.33, truncation_psi=0.9)
+    output = _make_output(tmp_path, port=port, runtime_state=state)
+    try:
+        messages = asyncio.run(_collect_state_from_loopback_client(port))
+    finally:
+        output.close()
+
+    states = []
+    for buf in messages:
+        flags, _seq, _ts = struct.unpack(">BIQ", buf[:13])
+        if flags & 0x02:  # _STATE_FLAG
+            states.append(json.loads(buf[13:]))
+
+    assert states, "no state message received"
+    assert states[-1]["position"] == 0.33
+    assert states[-1]["truncation"] == 0.9

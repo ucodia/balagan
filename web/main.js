@@ -1,10 +1,11 @@
 // BalaGAN WebTransport + WebCodecs client.
 //
-// Connects to the BalaGAN WebTransport server, reads one encoded H.264 access
-// unit per incoming unidirectional stream, and decodes it to a <canvas> with
-// WebCodecs. Each stream carries a 13-byte header (flags | seq | timestamp_ms)
-// followed by an Annex B frame, so the decoder is configured WITHOUT a
-// `description`.
+// Connects to the BalaGAN WebTransport server, reads one message per incoming
+// unidirectional stream behind a 13-byte header (flags | seq | timestamp_ms).
+// Most messages are encoded H.264 access units decoded to a <canvas> with
+// WebCodecs (configured WITHOUT a `description`, since the payload is Annex B);
+// messages flagged STATE carry a JSON RuntimeState snapshot used to keep the UI
+// in sync with control changes from OSC, the Qt GUI, or other browsers.
 //
 // The cert hash and WebTransport port are fetched from the hosting engine at
 // /config.json, so nothing machine-specific is hardcoded here. The connection
@@ -15,6 +16,15 @@ const CODEC = "avc1.640028"; // H.264 High@4.0; adjust if your stream differs
 
 const HEADER_BYTES = 13;
 const KEYFRAME_FLAG = 0x01;
+const STATE_FLAG = 0x02; // payload is a JSON RuntimeState snapshot, not a frame
+
+// Controls touched within this window are not overwritten by incoming server
+// state, so a live drag is never yanked back by a slightly stale push.
+const TOUCH_GRACE_MS = 600;
+const lastTouched = {};
+const touch = (id) => (lastTouched[id] = performance.now());
+const recentlyTouched = (id) =>
+  lastTouched[id] !== undefined && performance.now() - lastTouched[id] < TOUCH_GRACE_MS;
 
 const canvas = document.getElementById("view");
 const ctx = canvas.getContext("2d");
@@ -93,7 +103,10 @@ async function setupControls(transport) {
 
   const bind = (id, addr) => {
     const el = document.getElementById(id);
-    el.addEventListener("input", () => send(addr, parseFloat(el.value)));
+    el.addEventListener("input", () => {
+      touch(id);
+      send(addr, parseFloat(el.value));
+    });
   };
   bind("position", "/position");
   bind("truncation", "/truncation");
@@ -101,7 +114,10 @@ async function setupControls(transport) {
   bind("speedY", "/seedSpeedY");
 
   const anim = document.getElementById("anim");
-  anim.addEventListener("change", () => send("/seedAnim", anim.checked ? 1 : 0));
+  anim.addEventListener("change", () => {
+    touch("anim");
+    send("/seedAnim", anim.checked ? 1 : 0);
+  });
 
   // Drag the video canvas to move the seed, like the Qt viewport.
   let seedX = 0;
@@ -118,6 +134,7 @@ async function setupControls(transport) {
   });
   canvas.addEventListener("pointermove", (ev) => {
     if (!dragging) return;
+    touch("seed");
     seedX += (ev.clientX - lastX) * SEED_DRAG_SCALE;
     seedY += (ev.clientY - lastY) * SEED_DRAG_SCALE;
     lastX = ev.clientX;
@@ -128,6 +145,26 @@ async function setupControls(transport) {
   const endDrag = () => (dragging = false);
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
+
+  // Reflect state pushed by the server (OSC, the Qt GUI, or another browser).
+  // Setting .value/.checked programmatically does not fire input/change events,
+  // so this never echoes back; recently-touched controls are left alone.
+  const setSlider = (id, value) => {
+    if (recentlyTouched(id) || value === undefined) return;
+    const el = document.getElementById(id);
+    if (el && parseFloat(el.value) !== value) el.value = value;
+  };
+  return (state) => {
+    setSlider("position", state.position);
+    setSlider("truncation", state.truncation);
+    setSlider("speedX", state.seedSpeedX);
+    setSlider("speedY", state.seedSpeedY);
+    if (!recentlyTouched("anim")) anim.checked = !!state.seedAnim;
+    if (!recentlyTouched("seed")) {
+      if (state.seedX !== undefined) seedX = state.seedX;
+      if (state.seedY !== undefined) seedY = state.seedY;
+    }
+  };
 }
 
 async function run() {
@@ -162,7 +199,13 @@ async function run() {
     return;
   }
   setStatus("connected — waiting for frames…");
-  setupControls(transport).catch((e) => setStatus(`control error: ${e.message}`));
+  let applyState = () => {};
+  try {
+    applyState = await setupControls(transport);
+  } catch (e) {
+    setStatus(`control error: ${e.message}`);
+  }
+  const textDecoder = new TextDecoder();
 
   const decoder = makeDecoder();
   let configured = false;
@@ -180,6 +223,15 @@ async function run() {
     const isKeyframe = (flags & KEYFRAME_FLAG) !== 0;
     const timestampMs = Number(view.getBigUint64(5));
     const data = buffer.subarray(HEADER_BYTES);
+
+    if (flags & STATE_FLAG) {
+      try {
+        applyState(JSON.parse(textDecoder.decode(data)));
+      } catch (e) {
+        console.warn("bad state message", e);
+      }
+      continue;
+    }
 
     if (!configured) {
       if (!isKeyframe) continue; // can't start mid-GOP
