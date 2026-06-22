@@ -131,13 +131,6 @@ class WebStreamOutput:
         self._encoder = VideoEncoder(width, height, self._encoder_config)
         self._sequence = 0
 
-        # Per-second diagnostic counters (temporary; for latency/throughput work).
-        self._stat_frames = 0
-        self._stat_encode_s = 0.0
-        self._stat_drops = 0
-        self._stat_streams = 0
-        self._stat_last = time.perf_counter()
-
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server = None
         self._subscribers: set = set()
@@ -171,10 +164,7 @@ class WebStreamOutput:
 
     def send(self, frame_uint8_rgb: np.ndarray) -> None:
         """Encode one ``[H, W, 3]`` uint8 RGB frame and queue it for delivery."""
-        encode_start = time.perf_counter()
-        chunks = self._encoder.encode(frame_uint8_rgb)
-        self._stat_encode_s += time.perf_counter() - encode_start
-        for chunk in chunks:
+        for chunk in self._encoder.encode(frame_uint8_rgb):
             seq = self._sequence
             self._sequence = (self._sequence + 1) & 0xFFFFFFFF
             flags = _KEYFRAME_FLAG if chunk.is_keyframe else 0
@@ -187,35 +177,6 @@ class WebStreamOutput:
             except RuntimeError:
                 # Loop is shutting down; drop the frame rather than crash render.
                 return
-        self._stat_frames += 1
-        self._maybe_log_stats()
-
-    def _maybe_log_stats(self) -> None:
-        """Once per second, log per-frame timing and queue/stream counters.
-
-        Temporary instrumentation for latency/throughput diagnosis: it shows
-        whether per-frame cost grows on the encode side or the QUIC side.
-        """
-        elapsed = time.perf_counter() - self._stat_last
-        if elapsed < 1.0:
-            return
-        frames = self._stat_frames or 1
-        logger.debug(
-            "web-stream: %.1f fps | encode %.1f ms/frame | pending %d/%d | "
-            "drops %d/s | streams %d/s | subscribers %d",
-            self._stat_frames / elapsed,
-            1000.0 * self._stat_encode_s / frames,
-            len(self._pending) if self._pending is not None else 0,
-            self._queue_size,
-            self._stat_drops,
-            self._stat_streams,
-            len(self._subscribers),
-        )
-        self._stat_frames = 0
-        self._stat_encode_s = 0.0
-        self._stat_drops = 0
-        self._stat_streams = 0
-        self._stat_last = time.perf_counter()
 
     def close(self) -> None:
         """Flush the encoder, stop the servers, and join the loop thread."""
@@ -340,8 +301,6 @@ class WebStreamOutput:
     def _enqueue(self, payload: bytes) -> None:
         # deque(maxlen) drops the oldest payload when full: exactly the
         # drop-oldest backpressure we want for live frames.
-        if len(self._pending) == self._queue_size:
-            self._stat_drops += 1
         self._pending.append(payload)
         self._wakeup.set()
 
@@ -353,7 +312,6 @@ class WebStreamOutput:
                 payload = self._pending.popleft()
                 for protocol in list(self._subscribers):
                     protocol.send_frame(payload)
-                    self._stat_streams += 1
 
     def _shutdown(self) -> None:
         for protocol in list(self._subscribers):
