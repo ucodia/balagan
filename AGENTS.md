@@ -17,7 +17,7 @@ conservative default FPS cap.
 ```
 balagan/
 ├── src/balagan/
-│   ├── cli.py                  # `balagan` entry point (--headless, --debug, --canonical-kimg)
+│   ├── cli.py                  # `balagan` entry point (--headless, --debug, --output, --canonical-index)
 │   ├── config.py               # run-folder scan + canonical defaulting
 │   ├── logging_config.py       # console + daily-rotating file
 │   ├── core/                   # the pipeline; imports neither gui nor io
@@ -30,15 +30,23 @@ balagan/
 │   │   └── weight_blender.py   # in-place state_dict lerp
 │   ├── io/
 │   │   ├── osc_server.py       # python-osc on its own thread
-│   │   ├── frame_output.py     # platform dispatch
+│   │   ├── control_mapping.py  # shared OSC/web control vocabulary
+│   │   ├── frame_output.py     # native sink dispatch + build_output (native vs web)
 │   │   ├── output_macos.py     # Syphon
-│   │   └── output_windows.py   # Spout (marked UNVERIFIED — Windows-only deps)
+│   │   ├── output_windows.py   # Spout (marked UNVERIFIED — Windows-only deps)
+│   │   ├── video_recorder.py   # MP4 recording (imageio-ffmpeg)
+│   │   ├── video_encoder.py    # H.264/HEVC encode for web streaming (PyAV)
+│   │   ├── web_stream.py       # WebTransport server + UI host + control/state channel
+│   │   └── dev_cert.py         # self-signed cert for local WebTransport
 │   └── gui/
 │       ├── main_window.py      # PySide6 QMainWindow
 │       ├── viewport.py         # rendered frame + mouse drag
 │       ├── control_panel.py    # widgets, two-way bound to RuntimeState
 │       └── render_worker.py    # QThread driving the engine loop
-├── tests/                      # pytest; core fully unit-tested, others integration only
+├── web/                        # dependency-free browser client (WebTransport + WebCodecs)
+├── scripts/                    # benchmark_stream.py — render + per-codec quality bench
+├── docs/                       # architecture notes (see web-streaming-architecture.md)
+├── tests/                      # pytest; see Testing below
 ├── stylegan3/                  # git submodule — DO NOT MODIFY
 ├── prototypes/                 # exploratory; reference for patterns, DO NOT MODIFY
 ├── pyproject.toml
@@ -47,10 +55,15 @@ balagan/
 
 ## Setup and common commands
 
+This project uses **uv** for everything: dependency management, script
+execution, and virtual environments. Run Python via `uv run`, add dependencies
+with `uv add`, and create environments with `uv venv` — never call `pip` or a
+bare `python`/`pytest` directly.
+
 ```bash
 git submodule update --init --recursive   # required before first uv sync
 uv sync                                    # install deps + build the project
-uv run pytest                              # full suite (~87 tests)
+uv run pytest                              # full suite
 uv run pytest tests/test_<module>.py -v    # focused
 uv run balagan --help                      # CLI surface
 uv run ruff check src/ tests/              # lint (if ruff is configured)
@@ -66,6 +79,10 @@ uv run ruff format src/ tests/             # format
   and `ninja`. The `[tool.uv.sources]` block routes the `torch` dep to that
   index for `sys_platform == 'win32' or 'linux'`.
 - **Linux.** Same CUDA index as Windows; not regularly verified.
+- **Web output (`--output web`).** Cross-platform streaming to a browser over
+  WebTransport/HTTP3 (`aioquic`), H.264 via PyAV. Defaults to `libx264` on every
+  platform — the hardware encoders (VideoToolbox/NVENC) emit bitstreams browsers
+  decode with high latency. See `docs/web-streaming-architecture.md`.
 - **Timer resolution.** Always use `time.perf_counter()` for per-frame
   timing. `time.monotonic()` is ~15 ms granularity on Windows and quantizes
   the frame limiter.
@@ -78,10 +95,11 @@ uv run ruff format src/ tests/             # format
 import from neither. Violations indicate a design problem — raise it in
 your status report rather than working around it.
 
-**Threading.** Render thread, OSC server thread, snapshot loader thread,
-Qt main thread. Shared state goes through `RuntimeState` (lock-guarded
-immutable `StateSnapshot` swap). Never call Qt APIs from a non-main thread
-— use signals.
+**Threading.** The app runs several threads concurrently. All shared state
+goes through `RuntimeState` (a lock-guarded immutable `StateSnapshot` swap).
+Never call a subsystem's API from a foreign thread — Qt only from the main
+thread, an event loop only from its own loop — use signals or thread-safe
+handoffs.
 
 **Tensor handling.** Snapshots load to the inference device once and stay
 there. Never move tensors between devices on the render hot path. The CPU
@@ -106,13 +124,30 @@ rules.
 
 - Every module in `src/balagan/core/` has a corresponding
   `tests/test_<module>.py`.
-- CLI, GUI and IO are tested at integration level only — no committed Qt
+- `io/` has unit and integration tests (including a loopback WebTransport
+  check). GUI and CLI are covered at integration level only — no committed Qt
   unit tests; offscreen smoke checks are throwaway.
 - Tests use a stub `nn.Module` (`z_dim=4`, `w_dim=4`, `num_ws=2`,
   `img_resolution=64`) for snapshot loading; never real `.pkl` files.
 - Run `uv run pytest` before declaring any task complete. If a test fails,
   fix it or explain why it can't be fixed in this scope — don't skip or
   comment out failing tests.
+
+## Adding or exposing a control
+
+A control is a chain, not a widget. Treat it as done only when all of these hold:
+
+- **Wired end to end.** The value it sets is consumed by code on the run path where
+  the control is shown. A control whose state nothing reads on that path is dead —
+  leave it out and flag the gap.
+- **Scoped to its surface.** A UI exposes only what is meaningful where it runs. Don't
+  mirror options belonging to another transport or to a host the UI may be remote from.
+- **Tolerant at the boundary.** Code parsing external input accepts every form a sender
+  may legitimately send, and degrades predictably on the rest.
+- **One source of truth.** When more than one input edits the same value, they read and
+  write the same state — never separate copies that can drift.
+- **Covered end to end.** The whole chain — vocabulary, transport/sync, each UI, and a
+  test — lands together. An untested control is unfinished.
 
 ## Things that will trip you up
 
@@ -161,6 +196,8 @@ that killed the render thread.
 - Do not refactor files you weren't asked to touch.
 - Do not add features without explicit user authorization. If something
   seems missing, flag it in your status report and let the human decide.
+- Do not expose a UI control whose state field has no consumer on that run
+  path. See "Adding or exposing a control".
 
 ## Working with the human
 
