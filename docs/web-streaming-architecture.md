@@ -196,12 +196,13 @@ Each frame is sent on its **own unidirectional QUIC stream** (one stream per
 frame). A 13-byte header precedes the encoded payload:
 
 ```
- byte:   0        1   2   3   4    5   6   7   8   9  10  11  12   13 ...
-       ┌────┐   ┌───────────────┐ ┌───────────────────────────┐ ┌────────┐
-       │flag│   │   sequence    │ │     timestamp (ms)         │ │ H.264  │
-       │ u8 │   │     u32 BE     │ │         u64 BE             │ │ Annex B│
-       └────┘   └───────────────┘ └───────────────────────────┘ └────────┘
-        bit0 = keyframe                                           payload
+┌────────┬──────────────┬────────────────────────┬───────────────┐
+│ flags  │ sequence     │ timestamp (ms)         │ H.264 payload │
+│ u8     │ u32 BE       │ u64 BE                 │ (Annex B)     │
+├────────┼──────────────┼────────────────────────┼───────────────┤
+│ byte 0 │ bytes 1-4    │ bytes 5-12             │ bytes 13...   │
+└────────┴──────────────┴────────────────────────┴───────────────┘
+  bit0 = keyframe
 ```
 
 `struct ">BIQ"` = `flags(u8) | sequence(u32) | timestamp_ms(u64)`. The keyframe
