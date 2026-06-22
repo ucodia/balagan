@@ -12,9 +12,15 @@ def snap(index: int) -> SnapshotInfo:
     return SnapshotInfo(index=index, pkl_path=Path(f"snap-{index:04d}.pkl"))
 
 
-def test_requires_at_least_two_snapshots():
+def test_requires_at_least_one_snapshot():
     with pytest.raises(ValueError):
-        Interpolator([snap(20)])
+        Interpolator([])
+
+
+def test_single_snapshot_maps_every_position_to_itself():
+    interp = Interpolator([snap(7)])
+    for t in (0.0, 0.5, 1.0):
+        assert interp(t) == (7, 7, 0.0)
 
 
 def test_t_zero_returns_the_first_pair():

@@ -15,14 +15,20 @@ class Interpolator:
     """
 
     def __init__(self, snapshots: Sequence[SnapshotInfo]) -> None:
-        if len(snapshots) < 2:
-            raise ValueError("Interpolator requires at least two snapshots")
+        if len(snapshots) < 1:
+            raise ValueError("Interpolator requires at least one snapshot")
         self._indices = tuple(
             s.index for s in sorted(snapshots, key=lambda s: s.index)
         )
 
     def __call__(self, t: float) -> tuple[int, int, float]:
-        """Return ``(index_a, index_b, blend)`` bracketing position ``t``."""
+        """Return ``(index_a, index_b, blend)`` bracketing position ``t``.
+
+        With a single snapshot there is nothing to interpolate: every position
+        maps to that snapshot blended with itself.
+        """
+        if len(self._indices) == 1:
+            return self._indices[0], self._indices[0], 0.0
         t = min(1.0, max(0.0, t))
         position = t * (len(self._indices) - 1)
         bracket = min(int(position), len(self._indices) - 2)

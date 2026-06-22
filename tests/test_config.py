@@ -68,9 +68,16 @@ def test_missing_snapshots_dir_raises_config_error(tmp_path):
         load_run(tmp_path / "does-not-exist")
 
 
-def test_fewer_than_two_snapshots_raises_config_error(tmp_path):
+def test_single_snapshot_loads(tmp_path):
     snapshots_dir = make_snapshots_dir(tmp_path, ["only.pkl"])
-    with pytest.raises(ConfigError, match="at least 2"):
+    cfg = load_run(snapshots_dir)
+    assert len(cfg.snapshots) == 1
+    assert cfg.canonical_index == 0
+
+
+def test_no_snapshots_raises_config_error(tmp_path):
+    snapshots_dir = make_snapshots_dir(tmp_path, [])
+    with pytest.raises(ConfigError, match="no .pkl snapshot files"):
         load_run(snapshots_dir)
 
 

@@ -37,18 +37,18 @@ def load_run(
     the middle of the sorted list (``snapshots[len(snapshots) // 2]``); pass
     ``canonical_index`` to override with a 0-based index into the sorted list.
 
-    Raises ``ConfigError`` if the directory is missing, contains fewer than
-    two snapshots, or the override index is out of range.
+    A single snapshot is valid: the run plays that one network across the whole
+    position range (no interpolation). Raises ``ConfigError`` if the directory is
+    missing, contains no snapshots, or the override index is out of range.
     """
     snapshots_dir = Path(snapshots_dir)
     if not snapshots_dir.is_dir():
         raise ConfigError(f"Snapshots directory not found: {snapshots_dir}")
 
     snapshots = _build_snapshot_index(snapshots_dir)
-    if len(snapshots) < 2:
+    if len(snapshots) < 1:
         raise ConfigError(
-            f"Snapshots directory {snapshots_dir} has {len(snapshots)} snapshot file(s); "
-            f"at least 2 are required"
+            f"Snapshots directory {snapshots_dir} contains no .pkl snapshot files"
         )
 
     if canonical_index is None:
