@@ -89,7 +89,9 @@ class WebStreamOutput:
 
     Implements the same ``send``/``close`` contract as the Syphon/Spout sinks, so
     the render loop treats it identically. ``runtime_state`` receives upstream
-    control messages from connected browsers. When ``web_dir`` is given, a plain
+    control messages from connected browsers. ``osc_server`` (optional, duck-typed:
+    needs ``.port`` and ``.restart(port)``) lets a browser rebind the OSC listener's
+    port, the one control that is not a runtime-state field. When ``web_dir`` is given, a plain
     HTTP server also hosts the browser client on ``127.0.0.1`` (a secure context,
     so WebTransport works) — no separate static server needed.
     """
@@ -103,6 +105,7 @@ class WebStreamOutput:
         cert: Path,
         key: Path,
         runtime_state=None,
+        osc_server=None,
         host: str = "0.0.0.0",
         port: int = 4433,
         fps: int = 30,
@@ -121,6 +124,7 @@ class WebStreamOutput:
         self._cert = Path(cert)
         self._key = Path(key)
         self._runtime_state = runtime_state
+        self._osc_server = osc_server
         self._queue_size = queue_size
         self._ui_httpd = None
 
@@ -346,7 +350,12 @@ class WebStreamOutput:
                 "seedAnim": bool(s.anim_playing),
                 "seedSpeedX": s.anim_speed_x,
                 "seedSpeedY": s.anim_speed_y,
+                "fpsCap": s.fps_cap,
+                "debug": bool(s.debug),
+                "status": s.status,
             }
+            if self._osc_server is not None:
+                state["oscPort"] = self._osc_server.port
             payload = _HEADER.pack(
                 _STATE_FLAG, 0, int(time.time() * 1000)
             ) + json.dumps(state).encode()
@@ -381,8 +390,6 @@ class WebStreamOutput:
 
         from balagan.io.control_mapping import apply_control
 
-        if self._runtime_state is None:
-            return
         try:
             message = json.loads(line)
             address = message["addr"]
@@ -390,7 +397,39 @@ class WebStreamOutput:
         except (ValueError, KeyError, TypeError):
             logger.warning("Ignoring malformed web control message: %r", line)
             return
+        # The OSC port targets the OSC server, not the runtime state, so it is
+        # handled independently of whether a runtime state is attached.
+        if address == "/oscPort":
+            self._set_osc_port(value)
+            return
+        if self._runtime_state is None:
+            return
         apply_control(self._runtime_state, address, value)
+
+    def _set_osc_port(self, value) -> None:
+        """Rebind the OSC listener to a new port on a browser's request.
+
+        Reverts to the previously bound port if the requested one is unavailable, so
+        a bad port never leaves the installation without OSC. The next state push
+        echoes the actually bound port, so the client field self-corrects.
+        """
+        if self._osc_server is None:
+            logger.warning("Ignoring /oscPort: no OSC server is attached to this output")
+            return
+        try:
+            port = int(value)
+        except (TypeError, ValueError):
+            logger.warning("Ignoring malformed /oscPort value: %r", value)
+            return
+        previous = self._osc_server.port
+        if port == previous:
+            return
+        try:
+            self._osc_server.restart(port)
+            logger.info("OSC listener rebound to port %d from web control", port)
+        except OSError as exc:
+            logger.warning("Could not bind OSC port %d: %s; reverting to %d", port, exc, previous)
+            self._osc_server.restart(previous)
 
 
 _PROTOCOL_CLASS = None

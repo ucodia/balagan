@@ -31,7 +31,7 @@ class RenderWorker(QThread):
     recording_failed = Signal(str)
 
     def __init__(
-        self, config, device, window_size: int, runtime_state, output_settings
+        self, config, device, window_size: int, runtime_state, output_settings, osc_server=None
     ) -> None:
         super().__init__()
         self._config = config
@@ -39,6 +39,7 @@ class RenderWorker(QThread):
         self._window_size = window_size
         self._runtime_state = runtime_state
         self._output_settings = output_settings
+        self._osc_server = osc_server
         self._engine = None
         self._output = None
         self._recorder = None
@@ -98,6 +99,7 @@ class RenderWorker(QThread):
                 width,
                 height,
                 runtime_state=self._runtime_state,
+                osc_server=self._osc_server,
             )
         self._output.send(frame)
 

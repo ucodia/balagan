@@ -8,6 +8,7 @@
   --accent: #6e8bff;
   --accent-track: #3a3a44;
   --radius: 8px;
+  --sidebar-width: 320px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
 }
@@ -30,13 +31,32 @@ body {
   font-size: 14px;
 }
 
+/* App shell: control sidebar on the left, viewport stage on the right ------ */
+
 .app {
-  max-width: 1024px;
-  margin: 0 auto;
+  height: 100%;
+  display: flex;
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  height: 100%;
+  overflow-y: auto;
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.stage {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 16px;
+  display: flex;
 }
 
 .app__header {
@@ -49,6 +69,8 @@ body {
 /* Viewport ---------------------------------------------------------------- */
 
 .viewport {
+  flex: 1;
+  min-height: 0;
   position: relative;
   background: #000;
   border: 1px solid var(--border);
@@ -59,7 +81,7 @@ body {
 .viewport__canvas {
   display: block;
   width: 100%;
-  height: 60vh;
+  height: 100%;
   object-fit: contain;
   touch-action: none;
   cursor: grab;
@@ -69,28 +91,27 @@ body {
   cursor: grabbing;
 }
 
-.viewport__status {
-  position: absolute;
-  left: 12px;
-  bottom: 10px;
-  padding: 4px 10px;
-  font-size: 12px;
-  color: var(--text);
-  background: rgba(0, 0, 0, 0.55);
-  border-radius: 6px;
-  pointer-events: none;
-}
-
 /* Control panel ----------------------------------------------------------- */
 
 .panel {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 18px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  gap: 20px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.group__title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 .control {
@@ -103,6 +124,12 @@ body {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
+}
+
+.control-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
 .control__row {
@@ -120,6 +147,66 @@ body {
   font-variant-numeric: tabular-nums;
   color: var(--text);
   font-size: 13px;
+}
+
+/* Number input ------------------------------------------------------------ */
+
+.number-input {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.number-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Button ------------------------------------------------------------------ */
+
+.button {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.button:hover {
+  border-color: var(--accent);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.button--play {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+/* Status ------------------------------------------------------------------ */
+
+.status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Radix Slider ------------------------------------------------------------ */
@@ -179,6 +266,11 @@ body {
   background: var(--accent);
 }
 
+.switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .switch__thumb {
   display: block;
   width: 18px;
@@ -191,4 +283,25 @@ body {
 
 .switch__thumb[data-state="checked"] {
   transform: translateX(20px);
+}
+
+/* Responsive: stack the viewport above the controls on narrow screens ------ */
+
+@media (max-width: 720px) {
+  .app {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    order: 2;
+    width: 100%;
+    height: auto;
+    border-right: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .stage {
+    order: 1;
+    height: 60vh;
+  }
 }

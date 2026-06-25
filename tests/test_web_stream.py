@@ -327,8 +327,10 @@ def test_server_pushes_runtime_state_to_clients(tmp_path):
 
     port = 4463
     state = RuntimeState()
-    state.update(position=0.33, truncation_psi=0.9)
-    output = _make_output(tmp_path, port=port, runtime_state=state)
+    state.update(position=0.33, truncation_psi=0.9, fps_cap=48, debug=True, status="2 fps")
+    output = _make_output(
+        tmp_path, port=port, runtime_state=state, osc_server=_FakeOSC(7711)
+    )
     try:
         messages = asyncio.run(_collect_state_from_loopback_client(port))
     finally:
@@ -343,3 +345,77 @@ def test_server_pushes_runtime_state_to_clients(tmp_path):
     assert states, "no state message received"
     assert states[-1]["position"] == 0.33
     assert states[-1]["truncation"] == 0.9
+    assert states[-1]["fpsCap"] == 48
+    assert states[-1]["debug"] is True
+    assert states[-1]["status"] == "2 fps"
+    assert states[-1]["oscPort"] == 7711
+
+
+class _FakeOSC:
+    """Minimal stand-in for OSCServer: just the .port/.restart surface web_stream uses."""
+
+    def __init__(self, port: int = 7700, fail_on: int | None = None) -> None:
+        self._port = port
+        self._fail_on = fail_on
+        self.restart_calls: list[int] = []
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    def restart(self, port: int) -> None:
+        self.restart_calls.append(port)
+        if port == self._fail_on:
+            raise OSError("port in use")
+        self._port = port
+
+
+async def _send_control_line_from_client(port: int, line: bytes):
+    from aioquic.asyncio import connect
+    from aioquic.h3.connection import H3_ALPN
+    from aioquic.quic.configuration import QuicConfiguration
+
+    config = QuicConfiguration(
+        is_client=True, alpn_protocols=H3_ALPN, max_datagram_frame_size=65536
+    )
+    config.verify_mode = ssl.CERT_NONE
+    authority = f"127.0.0.1:{port}"
+
+    async with connect(
+        "127.0.0.1", port, configuration=config, create_protocol=_make_h3_client_class()
+    ) as client:
+        await client.connect_webtransport(authority)
+        await asyncio.wait_for(client.session_ready, 5)
+        client.send_control(line)
+        await asyncio.sleep(0.5)
+
+
+def test_osc_port_control_rebinds_the_osc_server(tmp_path):
+    port = 4464
+    osc = _FakeOSC(7700)
+    output = _make_output(tmp_path, port=port, osc_server=osc)
+    try:
+        asyncio.run(
+            _send_control_line_from_client(port, b'{"addr": "/oscPort", "value": 9000}\n')
+        )
+    finally:
+        output.close()
+
+    assert osc.restart_calls == [9000]
+    assert osc.port == 9000
+
+
+def test_osc_port_control_reverts_on_bind_conflict(tmp_path):
+    port = 4465
+    osc = _FakeOSC(7700, fail_on=9000)
+    output = _make_output(tmp_path, port=port, osc_server=osc)
+    try:
+        asyncio.run(
+            _send_control_line_from_client(port, b'{"addr": "/oscPort", "value": 9000}\n')
+        )
+    finally:
+        output.close()
+
+    # Requested 9000 (raises), then reverts to the previous 7700.
+    assert osc.restart_calls == [9000, 7700]
+    assert osc.port == 7700

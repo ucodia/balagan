@@ -4,7 +4,7 @@ import { useRef } from "react";
 // Autolume convention (delta / font_size * 4e-2, font_size ≈ 13).
 const SEED_DRAG_SCALE = 4e-2 / 13;
 
-export function Viewport({ canvasRef, status, controls, send }) {
+export function Viewport({ canvasRef, controls, send }) {
   const drag = useRef(null);
 
   const onPointerDown = (e) => {
@@ -42,7 +42,6 @@ export function Viewport({ canvasRef, status, controls, send }) {
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       />
-      <div className="viewport__status">{status}</div>
     </div>
   );
 }

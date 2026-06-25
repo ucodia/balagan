@@ -6,13 +6,22 @@ import "./theme.css";
 
 export default function App() {
   const canvasRef = useRef(null);
-  const { status, controls, send } = useStream(canvasRef);
+  const { status, engineStatus, controls, send } = useStream(canvasRef);
 
   return (
     <div className="app">
-      <header className="app__header">BalaGAN</header>
-      <Viewport canvasRef={canvasRef} status={status} controls={controls} send={send} />
-      <ControlPanel controls={controls} send={send} />
+      <aside className="sidebar">
+        <header className="app__header">BalaGAN</header>
+        <ControlPanel
+          controls={controls}
+          send={send}
+          status={status}
+          engineStatus={engineStatus}
+        />
+      </aside>
+      <main className="stage">
+        <Viewport canvasRef={canvasRef} controls={controls} send={send} />
+      </main>
     </div>
   );
 }

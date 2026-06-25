@@ -28,6 +28,8 @@ _CONTROLS: dict[str, tuple[str, object, tuple[float, float] | None]] = {
     "/seedSpeedX": ("anim_speed_x", float, None),
     "/seedSpeedY": ("anim_speed_y", float, None),
     "/truncation": ("truncation_psi", float, (0.0, 1.0)),
+    "/fpsCap": ("fps_cap", int, (0, 120)),
+    "/debug": ("debug", _to_bool, None),
 }
 
 CONTROL_ADDRESSES = tuple(_CONTROLS)

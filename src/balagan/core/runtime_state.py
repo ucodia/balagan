@@ -19,6 +19,7 @@ class StateSnapshot:
     spout_syphon_enabled: bool = False
     recording_enabled: bool = False
     debug: bool = False
+    status: str = ""
 
 
 class RuntimeState:

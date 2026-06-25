@@ -139,6 +139,7 @@ class MainWindow(QMainWindow):
             self._window_size,
             self._runtime_state,
             self._output_settings,
+            self._osc_server,
         )
         worker.frame_ready.connect(self._viewport.update_frame)
         worker.status_changed.connect(self._control_panel.update_status)

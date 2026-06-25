@@ -42,7 +42,7 @@ def _run_headless(engine, osc_server, output_settings, runtime_state) -> None:
     first_frame = engine.render_frame()
     height, width = first_frame.shape[:2]
     output = build_output(
-        output_settings, width, height, runtime_state=runtime_state
+        output_settings, width, height, runtime_state=runtime_state, osc_server=osc_server
     )
     output.send(first_frame)
     logger.info("Headless rendering started; press Ctrl+C to stop")

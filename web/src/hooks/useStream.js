@@ -14,10 +14,13 @@ const INITIAL_CONTROLS = {
   seedAnim: false,
   seedX: 0,
   seedY: 0,
+  fpsCap: 30,
+  debug: false,
+  oscPort: 7700,
 };
 
 function toWire(field, value) {
-  return field === "seedAnim" ? (value ? 1 : 0) : value;
+  return typeof value === "boolean" ? (value ? 1 : 0) : value;
 }
 
 // Orchestrates the live session: fetch config, open the WebTransport
@@ -28,6 +31,7 @@ function toWire(field, value) {
 export function useStream(canvasRef) {
   const [status, setStatus] = useState("connecting…");
   const [fps, setFps] = useState(0);
+  const [engineStatus, setEngineStatus] = useState("");
   const [controls, setControls] = useState(INITIAL_CONTROLS);
 
   const controlsRef = useRef(INITIAL_CONTROLS);
@@ -54,9 +58,14 @@ export function useStream(canvasRef) {
     };
     const onFrame = (parsed) => decoder && decoder.decode(parsed);
     const onState = (incoming) => {
+      // `type` is the message tag and `status` is the read-only engine line; keep
+      // both out of the reconciled controls so they never become editable fields.
+      const { type, status: engine, ...rest } = incoming;
+      void type;
+      if (engine !== undefined) setEngineStatus(engine);
       const { merged, applied } = reconcile(
         controlsRef.current,
-        incoming,
+        rest,
         touchedAtRef.current,
         performance.now(),
       );
@@ -98,5 +107,5 @@ export function useStream(canvasRef) {
     };
   }, [canvasRef]);
 
-  return { status, fps, controls, send };
+  return { status, fps, engineStatus, controls, send };
 }

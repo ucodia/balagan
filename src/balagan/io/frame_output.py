@@ -36,7 +36,7 @@ class OutputSettings:
 
 
 def build_output(
-    settings: OutputSettings, width: int, height: int, *, runtime_state=None
+    settings: OutputSettings, width: int, height: int, *, runtime_state=None, osc_server=None
 ):
     """Construct the output sink for ``settings``.
 
@@ -57,6 +57,7 @@ def build_output(
             cert=settings.web_cert,
             key=settings.web_key,
             runtime_state=runtime_state,
+            osc_server=osc_server,
             port=settings.web_port,
             fps=fps,
             bitrate=settings.web_bitrate,

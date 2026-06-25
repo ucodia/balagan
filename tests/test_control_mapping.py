@@ -15,6 +15,8 @@ def test_each_address_updates_its_field():
     apply_control(state, "/seedSpeedX", 3.0)
     apply_control(state, "/seedSpeedY", -1.5)
     apply_control(state, "/truncation", 0.4)
+    apply_control(state, "/fpsCap", 24)
+    apply_control(state, "/debug", 1)
 
     snapshot = state.snapshot()
     assert snapshot.position == 0.5
@@ -24,6 +26,18 @@ def test_each_address_updates_its_field():
     assert snapshot.anim_speed_x == 3.0
     assert snapshot.anim_speed_y == -1.5
     assert snapshot.truncation_psi == 0.4
+    assert snapshot.fps_cap == 24
+    assert snapshot.debug is True
+
+
+def test_fps_cap_is_int_and_clamped():
+    state = RuntimeState()
+    apply_control(state, "/fpsCap", 200)
+    assert state.snapshot().fps_cap == 120
+    apply_control(state, "/fpsCap", -5)
+    assert state.snapshot().fps_cap == 0
+    apply_control(state, "/fpsCap", 30.9)
+    assert state.snapshot().fps_cap == 30
 
 
 def test_position_and_truncation_are_clamped():

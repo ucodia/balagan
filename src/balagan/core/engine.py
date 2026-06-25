@@ -211,6 +211,7 @@ class Engine:
         pct_a = round((1.0 - alpha) * 100)
         pct_b = round(alpha * 100)
         self._last_status = f"{fps} | {name_a} ({pct_a}%) | {name_b} ({pct_b}%)"
+        self._runtime_state.update(status=self._last_status)
         logger.info("%s | t=%.3f | %s (%d%%) -> %s (%d%%)", fps, position, name_a, pct_a, name_b, pct_b)
         self._frames_since_log = 0
         self._last_log_time = time.perf_counter()
