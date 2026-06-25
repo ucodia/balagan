@@ -1,4 +1,4 @@
-"""Qt main window: viewport on the left, control panel on the right.
+"""Qt main window: control panel on the left, viewport on the right.
 
 Owns the engine lifecycle. The window opens with or without a run folder; the
 render worker (re)builds the engine on its own thread whenever a folder is
@@ -58,8 +58,8 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._viewport, stretch=1)
         layout.addWidget(self._control_panel)
+        layout.addWidget(self._viewport, stretch=1)
         self.setCentralWidget(central)
 
         self._update_title()
