@@ -67,8 +67,8 @@ Then start the engine with web output:
 uv run balagan --headless --snapshots-dir <run> --output web
 ```
 
-This also hosts the browser client itself over plain HTTP, so just open it in
-Chrome/Edge — no separate static server needed:
+This also hosts the browser client (a React app built to `web/dist/`) over plain
+HTTP, so just open it in Chrome/Edge — no separate static server needed:
 
 ```
 http://127.0.0.1:8000
@@ -101,6 +101,27 @@ Run the test suite:
 
 ```bash
 uv run pytest
+```
+
+### Web UI
+
+The browser client lives in `web/` (React + Vite, plain JavaScript). It must be
+built before `--output web` can host it:
+
+```bash
+cd web
+npm install
+npm run build      # outputs web/dist/, which the engine serves
+```
+
+For UI work, run the Vite dev server alongside a running engine. It serves the
+app on http://localhost:5173 and proxies `/config.json` to the engine on port
+8000; the WebTransport connection is opened directly to the engine's QUIC port:
+
+```bash
+cd web
+npm run dev
+npm run test       # vitest unit tests for the wire protocol + control sync
 ```
 
 ## License

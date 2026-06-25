@@ -209,7 +209,11 @@ class WebStreamOutput:
         from http.server import ThreadingHTTPServer
 
         if not web_dir.is_dir():
-            logger.warning("Web UI directory not found: %s", web_dir)
+            logger.warning(
+                "Web UI build not found at %s — the stream will run without the "
+                "hosted UI. Build it with `npm install && npm run build` in web/.",
+                web_dir,
+            )
             return
         handler = functools.partial(_QuietHandler, directory=str(web_dir))
         try:

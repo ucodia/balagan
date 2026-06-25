@@ -43,7 +43,7 @@ balagan/
 │       ├── viewport.py         # rendered frame + mouse drag
 │       ├── control_panel.py    # widgets, two-way bound to RuntimeState
 │       └── render_worker.py    # QThread driving the engine loop
-├── web/                        # dependency-free browser client (WebTransport + WebCodecs)
+├── web/                        # React + Vite browser client (WebTransport + WebCodecs); builds to web/dist/
 ├── scripts/                    # benchmark_stream.py — render + per-codec quality bench
 ├── docs/                       # architecture notes (see web-streaming-architecture.md)
 ├── tests/                      # pytest; see Testing below

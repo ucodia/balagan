@@ -9,7 +9,7 @@ import click
 logger = logging.getLogger(__name__)
 
 _STYLEGAN3_DIR = Path(__file__).resolve().parent.parent.parent / "stylegan3"
-_WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
+_WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
 
 
 def _resolve_device(device: str) -> str:
