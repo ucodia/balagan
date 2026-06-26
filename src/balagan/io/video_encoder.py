@@ -61,7 +61,13 @@ def config_for(codec: str, *, fps: int, bitrate: int) -> EncoderConfig:
     realtime CBR; NVENC uses the ultra-low-latency preset with intra refresh.
     Unknown codecs get no extra options.
     """
-    keyframe_interval = max(1, fps * 2)
+    # Long GOP on purpose: a keyframe is ~3x a delta frame, so a short interval
+    # makes a periodic bandwidth spike that hitches the stream every couple of
+    # seconds on a bandwidth-limited browser link. New viewers don't have to wait
+    # for the next periodic keyframe — the web sink forces one on connect via
+    # VideoEncoder.request_keyframe — so the interval only bounds loss/shed
+    # recovery, where ~5 s is fine.
+    keyframe_interval = max(1, fps * 5)
     intra_refresh = False
     if codec.startswith("libx"):
         options = {"preset": "superfast", "tune": "zerolatency"}
@@ -95,7 +101,18 @@ class VideoEncoder:
         self._width = width
         self._height = height
         self._pts = 0
+        self._force_keyframe = False
         self._context = self._build_context(width, height)
+
+    def request_keyframe(self) -> None:
+        """Force the next encoded frame to be a keyframe (IDR).
+
+        Thread-safe (a single boolean flag): callers on other threads — e.g. the
+        WebTransport loop when a new viewer connects — use this so a fresh client
+        can start decoding immediately even with a long GOP, instead of waiting
+        for the next periodic keyframe.
+        """
+        self._force_keyframe = True
 
     def _build_context(self, width: int, height: int):
         import av  # lazy: PyAV is a heavy, optional dependency
@@ -138,6 +155,9 @@ class VideoEncoder:
         frame = av.VideoFrame.from_ndarray(frame_uint8_rgb, format="rgb24")
         frame.pts = self._pts
         self._pts += 1
+        if self._force_keyframe:
+            frame.pict_type = av.video.frame.PictureType.I
+            self._force_keyframe = False
         return [self._to_chunk(packet) for packet in self._context.encode(frame)]
 
     def close(self) -> list[EncodedChunk]:

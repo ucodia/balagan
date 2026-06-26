@@ -153,9 +153,12 @@ def _run_gui(
 @click.option(
     "--web-bitrate",
     type=int,
-    default=25_000_000,
+    default=8_000_000,
     show_default=True,
-    help="Target encoder bitrate in bits/sec for --output web.",
+    help="Target encoder bitrate in bits/sec for --output web. Default 8 Mbps: "
+    "the browser WebTransport path sustains ~8-10 Mbps here, and a faster render "
+    "rate pushing more than that overruns it (streams back up, fps collapses). "
+    "Raise it only if your client/link is proven to keep up.",
 )
 @click.option(
     "--web-cert",

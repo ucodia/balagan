@@ -39,6 +39,18 @@ _STATE_FLAG = 0x02  # payload is a JSON RuntimeState snapshot, not a video frame
 _DEFAULT_QUEUE_SIZE = 8
 _STATE_PUSH_INTERVAL = 0.1  # seconds between RuntimeState pushes to clients
 
+# Each frame is delivered on its own unidirectional QUIC stream, reclaimed only
+# once the client has drained and acknowledged it. If the link can't carry the
+# encoder's bitrate, those streams pile up unsent (flow-control blocked) and the
+# backlog grows without bound — the render thread's drop-oldest deque never sees
+# it, because the loop "successfully" hands each frame to a stream that then
+# can't flush. So we shed at the stream layer: once a connection is carrying more
+# than this many resident streams it is behind, and we drop new delta frames for
+# it rather than deepen the backlog. Keyframes and state messages are spared so
+# the decoder and UI can always recover. Steady state is ~8 streams; the headroom
+# absorbs transient bursts (a large keyframe, a GC pause) without dropping.
+_MAX_OUTSTANDING_STREAMS = 24
+
 
 def _display_host(host: str) -> str:
     """Resolve a wildcard bind address to this machine's LAN IP for logging."""
@@ -137,6 +149,26 @@ class WebStreamOutput:
         self._encoder = VideoEncoder(width, height, self._encoder_config)
         self._sequence = 0
 
+        # Cap the web encode rate to the target fps regardless of how fast the
+        # render loop calls send(). Uncapping the engine's fps would otherwise
+        # feed the encoder >30 fps, push aggregate bitrate past what the browser
+        # link sustains, and force the load-shedder to drop *delta* frames —
+        # which breaks the H.264 decode chain. Skipping *before* the encoder
+        # keeps the bitstream continuous. A token bucket (not a per-frame
+        # deadline) does the limiting so the engine's ~15 ms time.sleep jitter on
+        # Windows doesn't drop frames that are merely a hair early at the cap:
+        # the small bucket absorbs jitter while still capping the average rate.
+        self._token_fps = max(1, fps)
+        self._token_cap = 2.0
+        self._tokens = self._token_cap
+        self._last_token_t = time.perf_counter()
+
+        # --- TEMP DIAGNOSTICS (remove after debugging the Windows stall) ---
+        self._diag_sent = 0
+        self._diag_failed = 0
+        self._diag_last_exc = None
+        # -------------------------------------------------------------------
+
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server = None
         self._subscribers: set = set()
@@ -144,6 +176,7 @@ class WebStreamOutput:
         self._wakeup: asyncio.Event | None = None
         self._drain_task: asyncio.Task | None = None
         self._state_task: asyncio.Task | None = None
+        self._diag_task: asyncio.Task | None = None  # TEMP
         self._ready = threading.Event()
         self._thread = threading.Thread(
             target=self._run, name="web-stream", daemon=True
@@ -170,7 +203,21 @@ class WebStreamOutput:
     # -- render-thread API ---------------------------------------------------
 
     def send(self, frame_uint8_rgb: np.ndarray) -> None:
-        """Encode one ``[H, W, 3]`` uint8 RGB frame and queue it for delivery."""
+        """Encode one ``[H, W, 3]`` uint8 RGB frame and queue it for delivery.
+
+        Frames arriving faster than the configured fps are dropped *before*
+        encoding so the bitstream stays continuous and the aggregate bitrate
+        stays within what the browser link can carry.
+        """
+        now = time.perf_counter()
+        self._tokens = min(
+            self._token_cap,
+            self._tokens + (now - self._last_token_t) * self._token_fps,
+        )
+        self._last_token_t = now
+        if self._tokens < 1.0:
+            return  # over the target rate — drop before encoding
+        self._tokens -= 1.0
         for chunk in self._encoder.encode(frame_uint8_rgb):
             seq = self._sequence
             self._sequence = (self._sequence + 1) & 0xFFFFFFFF
@@ -273,13 +320,14 @@ class WebStreamOutput:
             loop.run_until_complete(self._start_server())
             self._drain_task = loop.create_task(self._drain())
             self._state_task = loop.create_task(self._push_state())
+            self._diag_task = loop.create_task(self._diagnostics())  # TEMP
             self._ready.set()
             loop.run_forever()
         except Exception:  # noqa: BLE001 — surface startup failures to __init__
             logger.exception("WebTransport server thread crashed")
             self._ready.set()
         finally:
-            for task in (self._drain_task, self._state_task):
+            for task in (self._drain_task, self._state_task, self._diag_task):
                 if task is not None:
                     task.cancel()
                     try:
@@ -362,6 +410,46 @@ class WebStreamOutput:
             for protocol in list(self._subscribers):
                 protocol.send_frame(payload)
 
+    async def _diagnostics(self) -> None:
+        """TEMP: log per-second delivery health to find the Windows stall.
+
+        Remove once the WebTransport slow-stream issue is diagnosed.
+        """
+        while True:
+            await asyncio.sleep(1.0)
+            sent, failed = self._diag_sent, self._diag_failed
+            self._diag_sent = self._diag_failed = 0
+            pending = len(self._pending) if self._pending is not None else -1
+            parts = [
+                f"sent/s={sent}",
+                f"failed/s={failed}",
+                f"pending={pending}/{self._queue_size}",
+                f"subs={len(self._subscribers)}",
+            ]
+            for proto in list(self._subscribers):
+                quic = getattr(proto, "_quic", None)
+                if quic is None:
+                    continue
+                sd = getattr(quic, "_streams", {})
+                streams = len(sd)
+                rcv_fin = sum(1 for s in sd.values() if s.receiver.is_finished)
+                snd_fin = sum(1 for s in sd.values() if s.sender.is_finished)
+                ack_fin = sum(1 for s in sd.values() if s.sender._acked_fin)
+                rmax = getattr(quic, "_remote_max_streams_uni", -1)
+                blocked = len(getattr(quic, "_streams_blocked_uni", []))
+                rmd = getattr(quic, "_remote_max_data", -1)
+                rmd_used = getattr(quic, "_remote_max_data_used", -1)
+                fc_left = rmd - rmd_used if rmd >= 0 and rmd_used >= 0 else -1
+                parts.append(
+                    f"[streams={streams} rcvfin={rcv_fin} sndfin={snd_fin} ackfin={ack_fin} "
+                    f"remoteMaxUni={rmax} blockedUni={blocked} "
+                    f"maxData={rmd} usedData={rmd_used} fcLeft={fc_left}]"
+                )
+            if self._diag_last_exc is not None:
+                parts.append(f"last_exc={self._diag_last_exc}")
+                self._diag_last_exc = None
+            logger.info("WEBDIAG %s", " ".join(parts))
+
     def _shutdown(self) -> None:
         for protocol in list(self._subscribers):
             protocol.close()
@@ -372,6 +460,9 @@ class WebStreamOutput:
 
     def register(self, protocol) -> None:
         self._subscribers.add(protocol)
+        # A new viewer can only begin decoding at a keyframe. With the long GOP
+        # this forces one on the next frame instead of making it wait seconds.
+        self._encoder.request_keyframe()
         logger.info("WebTransport client connected (%d total)", len(self._subscribers))
 
     def unregister(self, protocol) -> None:
@@ -528,6 +619,15 @@ def _make_protocol_class():
         def send_frame(self, payload: bytes) -> None:
             if self._session_id is None or self._http is None:
                 return
+            # Load-shed: if this connection is already behind (its per-frame
+            # streams aren't draining), drop delta frames rather than grow an
+            # unbounded backlog. Keyframes (recovery) and state messages (tiny,
+            # keep the UI synced) are always sent.
+            flags = payload[0]
+            shed_eligible = not (flags & (_KEYFRAME_FLAG | _STATE_FLAG))
+            if shed_eligible and len(self._quic._streams) > _MAX_OUTSTANDING_STREAMS:
+                self._server._diag_failed += 1  # TEMP: counts as a drop
+                return
             try:
                 stream_id = self._http.create_webtransport_stream(
                     self._session_id, is_unidirectional=True
@@ -535,7 +635,10 @@ def _make_protocol_class():
                 self._quic.send_stream_data(stream_id, payload, end_stream=True)
                 _finish_send_only_stream(self._quic, stream_id)
                 self.transmit()
-            except Exception:  # noqa: BLE001 — drop this frame, keep the session
+                self._server._diag_sent += 1  # TEMP
+            except Exception as exc:  # noqa: BLE001 — drop this frame, keep the session
+                self._server._diag_failed += 1  # TEMP
+                self._server._diag_last_exc = f"{type(exc).__name__}: {exc}"  # TEMP
                 logger.debug("Dropping frame for a failed WebTransport stream")
 
         def connection_lost(self, exc) -> None:
